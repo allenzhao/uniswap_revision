@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "uniswap-eqality"
+version = "0.1.0"
+description = ""
+authors = ["Alle Zehan Zhao"]
+readme = "README.md"
+packages = [{include = "uniswap_eqality"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+gmpy2 = "^2.1.5"
+pandas = "^2.0.2"
+tqdm = "^4.65.0"
+easydict = "^1.10"
+parallel-pandas = "^0.5.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
