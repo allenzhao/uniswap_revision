@@ -130,6 +130,25 @@ files = [
 ]
 
 [[package]]
+name = "pandarallel"
+version = "1.6.5"
+description = "An easy to use library to speed up computation (by parallelizing on multi CPUs) with pandas."
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "pandarallel-1.6.5.tar.gz", hash = "sha256:1c2df98ff6441e8ae13ff428ceebaa7ec42d731f7f972c41ce4fdef1d3adf640"},
+]
+
+[package.dependencies]
+dill = ">=0.3.1"
+pandas = ">=1"
+psutil = "*"
+
+[package.extras]
+dev = ["numpy", "pytest", "pytest-cov"]
+doc = ["mkdocs-material"]
+
+[[package]]
 name = "pandas"
 version = "2.0.2"
 description = "Powerful data structures for data analysis, time series, and statistics"
@@ -308,4 +327,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "eac9363537e1432498d74a2612d41d3e579f6c20b4895aae9a76f3d92a0392e8"
+content-hash = "2b7688ca769643d6ed99e8246d2c620d6132036c2ca5efcbe2975c011ec50254"
