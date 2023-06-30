@@ -28,6 +28,7 @@ pool_info_edict_list = [
 
 POOL_INFO = dict(zip(POOL_ADDR, pool_info_edict_list))
 UNISWAP_NFT_MANAGER = "0xc36442b4a4522e871399cd717abdd847ab11fe88"
+UNISWAP_MIGRATOR = '0xa5644e29708357803b5a882d272c41cc0df92b34'
 
 
 def get_parent(path=os.getcwd(), levels=1):

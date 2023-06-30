@@ -4,7 +4,7 @@
 import pandas as pd
 import numpy as np
 import os
-from shared_library.utils import POOL_ADDR, get_parent, POOL_INFO
+from codes.shared_library.utils import POOL_ADDR, get_parent, POOL_INFO
 
 
 def agg_ohlcv(x):

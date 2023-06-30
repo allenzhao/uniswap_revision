@@ -12,7 +12,7 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd
 
-from shared_library.utils import TICK_BASE, POOL_INFO, UNISWAP_NFT_MANAGER, Q96, POOL_ADDR
+from codes.shared_library.utils import TICK_BASE, POOL_INFO, UNISWAP_NFT_MANAGER, Q96, POOL_ADDR
 
 
 class LPData:

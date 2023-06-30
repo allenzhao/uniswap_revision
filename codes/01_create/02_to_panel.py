@@ -5,11 +5,11 @@ import pandas as pd
 from tqdm import tqdm
 from pandarallel import pandarallel
 
-from shared_library.utils import POOL_ADDR, POOL_INFO, get_parent, UNISWAP_NFT_MANAGER
+from codes.shared_library.utils import POOL_ADDR, POOL_INFO, get_parent, UNISWAP_NFT_MANAGER
 
 if __name__ == "__main__":
-    debug = False
-    pandarallel.initialize(progress_bar=True, nb_workers=60)
+    debug=False
+    pandarallel.initialize(progress_bar=True, nb_workers=30)
     data_folder_path = os.path.join(get_parent(), "data")
     res_dfs = []
     dfs = []
@@ -18,7 +18,6 @@ if __name__ == "__main__":
     daily_prices = pd.read_csv(os.path.join(data_folder_path, "raw", 'daily_pool_agg_results.csv'))
     weekly_prices = pd.read_csv(os.path.join(data_folder_path, "raw", 'weekly_pool_agg_results.csv'))
     for pool_addr in tqdm(POOL_ADDR):
-        print(f"Working on f{pool_addr}")
         daily_price = daily_prices[daily_prices["pool_address"] == pool_addr].copy()
         weekly_price = weekly_prices[weekly_prices["pool_address"] == pool_addr].copy()
         res_df = pd.read_pickle(
@@ -119,7 +118,6 @@ if __name__ == "__main__":
             last_action = all_actions[-1] if len(all_actions) > 0 else 'NAN'
             return last_action == 'INCREASE_LIQUIDITY'
 
-
         if debug:
             only_increase_cond2_lp_ids = sc_observations.sort_values(
                 ["nf_position_manager_address", "liquidity_provider", "block_timestamp", "action"]).groupby(
@@ -138,7 +136,7 @@ if __name__ == "__main__":
 
 
         def get_relevant_position_ids_for_increase_only(x, helper_df=sc_position_with_start_and_end_dates):
-            helper_df = helper_df.copy()
+            helper_df=helper_df.copy()
             sc_addr = x["nf_position_manager_address"]
             date = x["block_timestamp"]
             cond1 = helper_df["nf_position_manager_address"] == sc_addr
@@ -147,7 +145,6 @@ if __name__ == "__main__":
             cond = cond1 & cond2
             pos_ids = helper_df[cond]["position_id"].unique()
             return pos_ids
-
 
         if debug:
             only_increase_lp_init_date["pos_ids"] = only_increase_lp_init_date.apply(
@@ -191,7 +188,6 @@ if __name__ == "__main__":
             cond = cond1 & cond2 & cond3
             pos_ids = helper_df[cond]["position_id"].unique()
             return pos_ids
-
 
         if debug:
             decreased_lps_with_dates["pos_ids"] = decreased_lps_with_dates.apply(
@@ -279,6 +275,7 @@ if __name__ == "__main__":
         weekly_obs["week"] = pd.to_datetime(weekly_obs["date"]).dt.to_period('W-SAT').dt.start_time
         weekly_obs["week"].astype(str)
 
+        # Agg to LP daily level, simple average
         def group_weighted_mean_factory(df: pd.DataFrame, weight_col_name: str):
             # Ref: https://stackoverflow.com/a/69787938/
             def group_weighted_mean(x):
@@ -290,50 +287,23 @@ if __name__ == "__main__":
 
             return group_weighted_mean
 
-
         group_weighted_mean_one = group_weighted_mean_factory(weekly_obs, 'amount_last')
         print("\n grouping and calculating agg")
-
         tik = time.time()
-
-
-        def agg_daily_data_daily_average_test(x):
-            import numpy as np
-            import pandas as pd
-            weights = x["amount_last"].values
-            x1 = np.average(x["daily_overall_roi"].values)
-            x2 = np.average(x["daily_amount_roi"].values)
-            x3 = np.average(x["daily_fee_roi"].values)
-            x4 = np.sum(x["amount_input"].values)
-            x5 = np.sum(x["amount_output"].values)
-            x6 = x["position_id"].nunique()
-            x7 = np.average(x["sc"].values)
-            try:
-                x8 = np.average(x["daily_overall_roi"].values, weights=weights)
-            except ZeroDivisionError:
-                x8 = np.average(x["daily_overall_roi"].values)
-            try:
-                x9 = np.average(x["daily_amount_roi"].values, weights=weights)
-            except ZeroDivisionError:
-                x9 = np.average(x["daily_amount_roi"].values)
-            try:
-                x10 = np.average(x["daily_fee_roi"].values, weights=weights)
-            except ZeroDivisionError:
-                x10 = np.average(x["daily_fee_roi"].values)
-            try:
-                x11 = np.average(x["active_perc"].values, weights=weights)
-            except ZeroDivisionError:
-                x11 = np.average(x["active_perc"].values)
-            x12 = np.average(x["active_perc"].values)
-            return pd.Series([x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12],
-                             index=["overall_roi_daily_avg", "amount_roi_daily_avg", "fee_roi_daily_avg",
-                                    "total_amount_input", "total_amount_output", "n_pos", "sc_pct",
-                                    "overall_roi_daily_avg_weighted", "amount_roi_daily_avg_weighted",
-                                    "fee_roi_daily_avg_weighted", "active_perc_avg_weighted", "active_perc_avg"])
-
-
-        lp_daily_data_daily_averages = weekly_obs.groupby(["liquidity_provider", "week"]).parallel_apply(
-            agg_daily_data_daily_average_test)
+        lp_daily_data_daily_averages = weekly_obs.groupby(["liquidity_provider", "week"]).agg(
+            overall_roi_daily_avg=('daily_overall_roi', 'mean'),
+            amount_roi_daily_avg=('daily_amount_roi', 'mean'),
+            fee_roi_daily_avg=('daily_fee_roi', 'mean'),
+            total_amount_input=('amount_input', 'sum'),
+            total_amount_output=('amount_output', 'sum'),
+            n_pos=('position_id', 'nunique'),
+            sc_pct=('sc', 'mean'),
+            overall_roi_daily_avg_weighted=('daily_overall_roi', group_weighted_mean_one),
+            amount_roi_daily_avg_weighted=('daily_amount_roi', group_weighted_mean_one),
+            fee_roi_daily_avg_weighted=('daily_fee_roi', group_weighted_mean_one),
+            active_perc_avg_weighted=('active_perc', group_weighted_mean_one),
+            active_perc_avg=('active_perc', 'mean'),
+        )
         print(f"{time.time() - tik} passed")
         tik = time.time()
         # Merge with action
@@ -347,132 +317,85 @@ if __name__ == "__main__":
 
         lp_daily_data_daily_averages["week"] = lp_daily_data_daily_averages["week"].astype(str)
         lp_daily_data_daily_averages = lp_daily_data_daily_averages.merge(weekly_price, how='left', on=["week"])
-        lp_daily_data_daily_averages.to_pickle(f"{pool_addr}_lp_data_daily_03.pkl")
-        print(f"{time.time() - tik} passed")
-        tik = time.time()
-        print("grouping and calculating agg (alternative method)")
-        weekly_obs.sort_values(by=["liquidity_provider", "position_id", "week"], inplace=True)
-
-        # Alternatively, we agg to position-week level then agg to position-lp level
-        def agg_lp_position_weekly_test(x):
-            import numpy as np
-            import pandas as pd
-            weights = x["amount_last"].values
-            x1 = np.prod(x["daily_amount_roi"].values)
-            x2 = np.sum(x["fee"].values)
-            x3 = np.average(x["amount_last"].values)
-            x4 = x["amount_last"].values[-1]
-            x5 = x["amount"].values[-1]
-            x6 = np.average(x["amount"].values)
-            x7 = np.sum(x["amount_input"].values)
-            x8 = np.sum(x["amount_output"].values)
-            x9 = np.mean(x["sc"].values)
-            x10 = np.mean(x["active_perc"].values)
-            try:
-                x11 = np.average(x["amount_last"].values, weights=weights)
-            except ZeroDivisionError:
-                x11 = np.average(x["amount_last"].values)
-            try:
-                x12 = np.average(x["amount"].values, weights=weights)
-            except ZeroDivisionError:
-                x12 = np.average(x["amount"].values)
-            try:
-                x13 = np.average(x["active_perc"].values, weights=weights)
-            except ZeroDivisionError:
-                x13 = np.average(x["active_perc"].values)
-            return pd.Series([x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13],
-                             index=["amount_roi_weekly_prod", "fee_total", "amount_last_mean",
-                                    "amount_last_last", "amount_end", "amount_end_mean", "total_amount_input",
-                                    "total_amount_output", "sc_pct",
-                                    "active_perc_avg", "amount_last_wm", "amount_end_wm", "active_perc_avg_weighted"])
-
-        lp_position_weekly = weekly_obs.groupby(
-            ["liquidity_provider", "position_id", "week"]).parallel_apply(agg_lp_position_weekly_test).reset_index()
-        print(f"{time.time() - tik} passed")
-        tik = time.time()
-        lp_position_weekly["amount_last"] = lp_position_weekly["amount_end"] / lp_position_weekly[
-            'amount_roi_weekly_prod']
-        lp_position_weekly["amount_last_by_mean"] = lp_position_weekly["amount_end_wm"] / lp_position_weekly[
-            'amount_roi_weekly_prod']
-        lp_position_weekly["amount_last_by_wm"] = lp_position_weekly["amount_end_mean"] / lp_position_weekly[
-            'amount_roi_weekly_prod']
-
-        # Then from position we agg to the lp level
-        wm_for_lp_position_weekly_amt_last = group_weighted_mean_factory(lp_position_weekly, 'amount_last')
-        wm_for_lp_position_weekly_amt_last_by_mean = group_weighted_mean_factory(lp_position_weekly,
-                                                                                 'amount_last_by_mean')
-        wm_for_lp_position_weekly_amt_last_by_wm = group_weighted_mean_factory(lp_position_weekly, 'amount_last_by_wm')
-        print(f"{time.time() - tik} passed")
-        tik = time.time()
-        print("Finalizing result")
-        lp_position_weekly.sort_values(
-            by=["liquidity_provider", "position_id", "week"], inplace=True)
-
-
-        def agg_lp_position_weekly_final_test(x):
-            import numpy as np
-            import pandas as pd
-            wts_amt_last = x["amount_last"].values
-            wts_amt_last_by_mean = x["amount_last_by_mean"].values
-            wts_amt_last_by_wm = x["amount_last_by_wm"].values
-            x5 = np.sum(x["amount_last"].values)
-            x6 = np.sum(x["amount_last_by_mean"].values)
-            x7 = np.sum(x["amount_last_by_wm"].values)
-            x8 = np.sum(x["fee_total"].values)
-            x9 = np.sum(x["total_amount_input"].values)
-            x10 = np.sum(x["total_amount_output"].values)
-            x11 = x["position_id"].nunique()
-            x12 = np.mean(x["sc_pct"].values)
-            x13 = np.mean(x["active_perc_avg"])
-            try:
-                x1 = np.average(x["amount_roi_weekly_prod"].values, weights=wts_amt_last)
-            except ZeroDivisionError:
-                x1 = np.average(x["amount_roi_weekly_prod"].values)
-            try:
-                x2 = np.average(x["amount_roi_weekly_prod"].values, weights=wts_amt_last_by_wm)
-            except ZeroDivisionError:
-                x2 = np.average(x["amount_roi_weekly_prod"].values)
-            try:
-                x3 = np.average(x["amount_roi_weekly_prod"].values, weights=wts_amt_last_by_mean)
-            except ZeroDivisionError:
-                x3 = np.average(x["amount_roi_weekly_prod"].values)
-            try:
-                x4 = np.average(x["active_perc_avg_weighted"].values, weights=wts_amt_last)
-            except ZeroDivisionError:
-                x4 = np.average(x["active_perc_avg_weighted"].values)
-            return pd.Series([x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13],
-                             index=["amount_roi_weekly_prod_simple", "amount_roi_weekly_prod_wm",
-                                    "amount_roi_weekly_prod_mean",
-                                    "active_perc_wm", "amount_last_sum", "amount_last_by_mean_sum",
-                                    "amount_last_by_wm_sum",
-                                    "fee_total", "total_amount_input",
-                                    "total_amount_output", "n_pos", "sc_pct", "active_perc_avg"])
-
-
-        lp_position_weekly_final = lp_position_weekly.groupby(
-            ["liquidity_provider", "week"]).parallel_apply(agg_lp_position_weekly_final_test).reset_index()
-        print(f"{time.time() - tik} passed")
-        tik = time.time()
-        lp_position_weekly_final["fee_roi_simple"] = lp_position_weekly_final['fee_total'] / lp_position_weekly_final[
-            'amount_last_sum']
-        lp_position_weekly_final["fee_roi_mean"] = lp_position_weekly_final['fee_total'] / lp_position_weekly_final[
-            'amount_last_by_mean_sum']
-        lp_position_weekly_final["fee_roi_wm"] = lp_position_weekly_final['fee_total'] / lp_position_weekly_final[
-            'amount_last_by_wm_sum']
-        lp_position_weekly_final["overall_roi_simple"] = lp_position_weekly_final["fee_roi_simple"] + \
-                                                         lp_position_weekly_final["amount_roi_weekly_prod_simple"]
-        lp_position_weekly_final["overall_roi_mean"] = lp_position_weekly_final["fee_roi_mean"] + \
-                                                       lp_position_weekly_final["amount_roi_weekly_prod_wm"]
-        lp_position_weekly_final["overall_roi_wm"] = lp_position_weekly_final["fee_roi_wm"] + lp_position_weekly_final[
-            "amount_roi_weekly_prod_mean"]
-        # Calculate action counts - need to be from that LP directly!
-
-        # merge with
-
-        lp_position_weekly_final = lp_position_weekly_final.reset_index().merge(action_by_lp_week, how='left',
-                                                                                on=["liquidity_provider", "week"])
-        lp_position_weekly_final = lp_position_weekly_final.merge(action_by_lp_week, how='left',
-                                                                  on=["liquidity_provider", "week"])
-        lp_position_weekly_final["week"] = lp_position_weekly_final["week"].astype(str)
-        lp_position_weekly_final = lp_position_weekly_final.merge(weekly_price, how='left', on=["week"])
-        lp_position_weekly_final.to_pickle(f"{pool_addr}_lp_data_weekly_test.pkl")
+        lp_daily_data_daily_averages.to_pickle(f"{pool_addr}_lp_data_daily.pkl")
+        # print(f"{time.time() - tik} passed")
+        # tik = time.time()
+        # print("grouping and calculating agg (alternative method)")
+        # weekly_obs.sort_values(by=["liquidity_provider", "position_id", "week"], inplace=True)
+        # # Alternatively, we agg to position-week level then agg to position-lp level
+        # lp_position_weekly = weekly_obs.groupby(
+        #     ["liquidity_provider", "position_id", "week"]).agg(
+        #     amount_roi_weekly_prod=('daily_amount_roi', 'prod'),
+        #     fee_total=('fee', 'sum'),
+        #     amount_last_wm=('amount_last', group_weighted_mean_one),
+        #     amount_last_mean=('amount_last', 'mean'),
+        #     amount_last_last=('amount_last', 'last'),
+        #     amount_end=('amount', 'last'),
+        #     amount_end_wm=('amount', group_weighted_mean_one),
+        #     amount_end_mean=('amount', 'mean'),
+        #     total_amount_input=('amount_input', 'sum'),
+        #     total_amount_output=('amount_output', 'sum'),
+        #     sc_pct=('sc', 'mean'),
+        #     active_perc_avg_weighted=('active_perc', group_weighted_mean_one),
+        #     active_perc_avg=('active_perc', 'mean'),
+        # ).reset_index()
+        # print(f"{time.time() - tik} passed")
+        # tik = time.time()
+        # lp_position_weekly["amount_last"] = lp_position_weekly["amount_end"] / lp_position_weekly[
+        #     'amount_roi_weekly_prod']
+        # lp_position_weekly["amount_last_by_mean"] = lp_position_weekly["amount_end_wm"] / lp_position_weekly[
+        #     'amount_roi_weekly_prod']
+        # lp_position_weekly["amount_last_by_wm"] = lp_position_weekly["amount_end_mean"] / lp_position_weekly[
+        #     'amount_roi_weekly_prod']
+        #
+        # # Then from position we agg to the lp level
+        # wm_for_lp_position_weekly_amt_last = group_weighted_mean_factory(lp_position_weekly, 'amount_last')
+        # wm_for_lp_position_weekly_amt_last_by_mean = group_weighted_mean_factory(lp_position_weekly,
+        #                                                                          'amount_last_by_mean')
+        # wm_for_lp_position_weekly_amt_last_by_wm = group_weighted_mean_factory(lp_position_weekly, 'amount_last_by_wm')
+        # print(f"{time.time() - tik} passed")
+        # tik = time.time()
+        # print("Finalizing result")
+        # lp_position_weekly.sort_values(
+        #     by=["liquidity_provider", "position_id", "week"], inplace=True)
+        # lp_position_weekly_final = lp_position_weekly.groupby(
+        #     ["liquidity_provider", "week"]).agg(
+        #     amount_roi_weekly_prod_simple=('amount_roi_weekly_prod', wm_for_lp_position_weekly_amt_last),
+        #     amount_roi_weekly_prod_wm=('amount_roi_weekly_prod', wm_for_lp_position_weekly_amt_last_by_wm),
+        #     amount_roi_weekly_prod_mean=('amount_roi_weekly_prod', wm_for_lp_position_weekly_amt_last_by_mean),
+        #     amount_last_sum=('amount_last', 'sum'),
+        #     amount_last_by_mean_sum=('amount_last_by_mean', 'sum'),
+        #     amount_last_by_wm_sum=('amount_last_by_wm', 'sum'),
+        #     fee_total=('fee_total', 'sum'),
+        #     total_amount_input=('total_amount_input', 'sum'),
+        #     total_amount_output=('total_amount_output', 'sum'),
+        #     n_pos=('position_id', 'nunique'),
+        #     sc_pct=('sc_pct', 'mean'),
+        #     active_perc_avg=('active_perc_avg', 'mean'),
+        #     active_perc_wm=('active_perc_avg_weighted', wm_for_lp_position_weekly_amt_last_by_wm),
+        # )
+        # print(f"{time.time() - tik} passed")
+        # tik = time.time()
+        # lp_position_weekly_final["fee_roi_simple"] = lp_position_weekly_final['fee_total'] / lp_position_weekly_final[
+        #     'amount_last_sum']
+        # lp_position_weekly_final["fee_roi_mean"] = lp_position_weekly_final['fee_total'] / lp_position_weekly_final[
+        #     'amount_last_by_mean_sum']
+        # lp_position_weekly_final["fee_roi_wm"] = lp_position_weekly_final['fee_total'] / lp_position_weekly_final[
+        #     'amount_last_by_wm_sum']
+        # lp_position_weekly_final["overall_roi_simple"] = lp_position_weekly_final["fee_roi_simple"] + \
+        #                                                  lp_position_weekly_final["amount_roi_weekly_prod_simple"]
+        # lp_position_weekly_final["overall_roi_mean"] = lp_position_weekly_final["fee_roi_mean"] + \
+        #                                                lp_position_weekly_final["amount_roi_weekly_prod_wm"]
+        # lp_position_weekly_final["overall_roi_wm"] = lp_position_weekly_final["fee_roi_wm"] + lp_position_weekly_final[
+        #     "amount_roi_weekly_prod_mean"]
+        # # Calculate action counts - need to be from that LP directly!
+        #
+        # # merge with
+        #
+        # lp_position_weekly_final = lp_position_weekly_final.reset_index().merge(action_by_lp_week, how='left',
+        #                                                                         on=["liquidity_provider", "week"])
+        # lp_position_weekly_final = lp_position_weekly_final.merge(action_by_lp_week, how='left',
+        #                                                           on=["liquidity_provider", "week"])
+        # lp_position_weekly_final["week"] = lp_position_weekly_final["week"].astype(str)
+        # lp_position_weekly_final = lp_position_weekly_final.merge(weekly_price, how='left', on=["week"])
+        # lp_position_weekly_final.to_pickle(f"{pool_addr}_lp_data_weekly.pkl")
