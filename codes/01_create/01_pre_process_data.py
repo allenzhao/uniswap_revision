@@ -3,7 +3,6 @@ import logging
 import os
 
 from pandas import DataFrame
-from parallel_pandas import ParallelPandas
 
 import gmpy2
 from gmpy2 import mpz
@@ -39,7 +38,6 @@ class LPData:
 
     def __init__(self, pool_address, data_path=None, debug=True, parallelize_processing=False):
         # basic setups
-        ParallelPandas.initialize(n_cpu=32, split_factor=4, disable_pr_bar=False)
         gmpy2.get_context().precision = 200
         tqdm.pandas()
         # create vars
@@ -67,7 +65,7 @@ class LPData:
             self.parallelize = self.debug
         self.NFT_MANAGER = UNISWAP_NFT_MANAGER
         self.pickle_path = os.path.join(self.data_path, "pkl")
-        self.data = self.read_file(data_path=os.path.join(self.data_path, self.pool_address + "_fixed.csv"))
+        self.data = self.read_file(data_path=os.path.join(self.data_path, "lp_data", self.pool_address + "_fixed.csv"))
 
         self.start_block = self.data["block_number"].min()
         logging.basicConfig(

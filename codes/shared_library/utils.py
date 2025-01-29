@@ -1,8 +1,9 @@
-from math import floor
-from math import log
 import os
 from easydict import EasyDict
 import gmpy2
+import urllib.request
+import json
+
 
 TICK_BASE = 1.0001
 Q96 = 2 ** 96
@@ -29,6 +30,7 @@ pool_info_edict_list = [
 POOL_INFO = dict(zip(POOL_ADDR, pool_info_edict_list))
 UNISWAP_NFT_MANAGER = "0xc36442b4a4522e871399cd717abdd847ab11fe88"
 UNISWAP_MIGRATOR = '0xa5644e29708357803b5a882d272c41cc0df92b34'
+UNISWAP_GRAPHQL_URL = "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3"
 
 
 def get_parent(path=os.getcwd(), levels=1):
@@ -39,5 +41,26 @@ def get_parent(path=os.getcwd(), levels=1):
         common = os.path.dirname(common)
     return os.path.abspath(common)
 
+
 def price_to_tick(price, d1, d0):
     return gmpy2.floor(gmpy2.log(10 ** (d1 - d0) / price) / gmpy2.log(1.0001))
+
+def query_graphql(query, variables):
+    req = urllib.request.Request(UNISWAP_GRAPHQL_URL)
+    req.add_header('Content-Type', 'application/json; charset=utf-8')
+    jsondata = {"query": query, "variables": variables}
+    jsondataasbytes = json.dumps(jsondata).encode('utf-8')
+    req.add_header('Content-Length', len(jsondataasbytes))
+    response = urllib.request.urlopen(req, jsondataasbytes)
+    obj = json.load(response)
+    return obj
+
+
+POOL_TICK_QUERY_AT_GIVEN_BLOCK = """query pools($pool_id: ID!, $block_num: Int!) {
+  pools (where: {id: $pool_id}, block: { number: $block_num}) {
+    tick
+    liquidity
+  }
+}"""
+
+ETHERSCAN_API_KEY = "WA99EHHEC3V5A3SZ51H9T47YISMZF65T2S"

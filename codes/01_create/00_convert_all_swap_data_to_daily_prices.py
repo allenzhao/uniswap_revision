@@ -39,7 +39,8 @@ if __name__ == "__main__":
     file_path = os.path.join(raw_folder_path, "all_swaps.csv")
     all_swaps_df = pd.read_csv(file_path, low_memory=False, parse_dates=["block_timestamp"])
     # Fix issue
-    all_swaps_df = all_swaps_df[all_swaps_df["tx_hash"]!='0xcdf9d46f009c8fe02b04889b5e927f3a49004ac246cd76140ff8890563b9374b'].copy()
+    all_swaps_df = all_swaps_df[
+        all_swaps_df["tx_hash"] != '0xcdf9d46f009c8fe02b04889b5e927f3a49004ac246cd76140ff8890563b9374b'].copy()
     all_daily = pd.DataFrame()
     all_weekly = pd.DataFrame()
     for pool_addr in POOL_ADDR:

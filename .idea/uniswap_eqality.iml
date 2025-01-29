@@ -2,7 +2,7 @@
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$" />
-    <orderEntry type="jdk" jdkName="Poetry (uniswap_eqality)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Python 3.10 (uniswap_data_processing)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>

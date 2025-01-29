@@ -17,6 +17,8 @@ if __name__ == "__main__":
     daily_prices = pd.read_csv(os.path.join(data_folder_path, "raw", 'daily_pool_agg_results.csv'))
     weekly_prices = pd.read_csv(os.path.join(data_folder_path, "raw", 'weekly_pool_agg_results.csv'))
     ret_data = pd.DataFrame()
+    action_by_lp = pd.DataFrame()
+    amount_by_lp_actual = pd.DataFrame()
     for pool_addr in tqdm(POOL_ADDR):
         print(f"Working on f{pool_addr}")
         daily_price = daily_prices[daily_prices["pool_address"] == pool_addr].copy()
@@ -24,7 +26,7 @@ if __name__ == "__main__":
         res_df = pd.read_pickle(
             os.path.join(data_folder_path, 'raw', 'pkl', f"done_accounting_day_datas_{pool_addr}.pkl"))
         res_df = res_df.drop(columns=['open', 'high', 'low', 'close', 'high_tick', 'low_tick'])
-        cols_to_change_type = ['liquidity_mpz', 'net_liquidity', 'amount0', 'amount1', 'fee0', 'fee1']
+        cols_to_change_type = ['amount0', 'amount1', 'fee0', 'fee1']
         res_df[cols_to_change_type] = res_df[cols_to_change_type].astype('float')
         pool_info = POOL_INFO[pool_addr]
         res_df = res_df.merge(daily_price, how='left', on='date')
@@ -82,19 +84,18 @@ if __name__ == "__main__":
         # Now we link positions with LPs - based on who carried out the action and what
         action_df = pd.read_pickle(os.path.join(data_folder_path, 'raw', 'pkl', f"data_{pool_addr}_0626_no_short.pkl"))
         action_df_for_week = action_df.copy()
-        action_df_for_week["week"] = action_df_for_week["block_timestamp"].dt.to_period('W-SAT').dt.start_time
-        action_by_lp_week = action_df_for_week.groupby(["liquidity_provider", "week", "action"]).size().unstack(
-            fill_value=0).reset_index()
         # Need a mapping like this:
         # LP_ID, PositionID, Date
         # We need a date range, i.e. when does that LP interacted with the position (special case for SC)
         # Get the SC:
         sc_cond1 = action_df["nf_position_manager_address"] != UNISWAP_NFT_MANAGER
-        # There could also be whose to address is not UNISWAP_NFT_MANAGER # This case we identify that position as a SC, in addition
+        # There could also be whose to address is not UNISWAP_NFT_MANAGER
+        # This case we identify that position as an SC, in addition
         one_position_id_has_multiple_lp_id = action_df.groupby(["position_id"])["liquidity_provider"].nunique()
         position_id_multiple = one_position_id_has_multiple_lp_id[one_position_id_has_multiple_lp_id > 1].index
         sc_cond2_pre = action_df["position_id"].isin(position_id_multiple)
-        sc_cond2 = (action_df["to_address"] != UNISWAP_NFT_MANAGER) & (action_df["to_address"]!=UNISWAP_MIGRATOR) & sc_cond2_pre
+        sc_cond2 = (action_df["to_address"] != UNISWAP_NFT_MANAGER) & (
+                action_df["to_address"] != UNISWAP_MIGRATOR) & sc_cond2_pre
         position_id_sc = action_df[(sc_cond1 | sc_cond2)][
             "position_id"].unique()
 
@@ -221,7 +222,8 @@ if __name__ == "__main__":
         non_sc_positions = res_df[~res_df["position_id"].isin(position_id_sc)].copy()
 
         # Then our mapping should first duplicate the position observations
-        sc_positions_created_date = sc_positions.groupby(["position_id"])["date"].min().reset_index().rename(columns={"date": "sc_position_creation_date"})
+        sc_positions_created_date = sc_positions.groupby(["position_id"])["date"].min().reset_index().rename(
+            columns={"date": "sc_position_creation_date"})
         sc_positions = sc_positions.merge(sc_positions_created_date, how='left', on='position_id')
         # Then for the ones that have wrong date range: remove those dates?
         sc_positions_obs_part_one = sc_lp_position_map_part_one.merge(sc_positions, how='left', on='position_id')
@@ -229,9 +231,11 @@ if __name__ == "__main__":
         # Filter out the ones that do not match the time
         # todo: this might cause trouble when doing the division it's better we take everything into account
         # todo: see sc_position_lp_count
-        part_one_date_condition = sc_positions_obs_part_one["sc_position_creation_date"] >= sc_positions_obs_part_one["insertion_date"].dt.date
+        part_one_date_condition = sc_positions_obs_part_one["sc_position_creation_date"] >= sc_positions_obs_part_one[
+            "insertion_date"].dt.date
         sc_positions_obs_part_one_final = sc_positions_obs_part_one[part_one_date_condition].copy()
-        part_two_date_condition_1 = sc_positions_obs_part_two["sc_position_creation_date"] >= sc_positions_obs_part_two["insertion_date"].dt.date
+        part_two_date_condition_1 = sc_positions_obs_part_two["sc_position_creation_date"] >= sc_positions_obs_part_two[
+            "insertion_date"].dt.date
         part_two_date_condition_2 = sc_positions_obs_part_two["date"] <= sc_positions_obs_part_two["leave_date"].dt.date
         part_two_date_conditions = part_two_date_condition_1 & part_two_date_condition_2
         sc_positions_obs_part_two_final = sc_positions_obs_part_two[part_two_date_conditions].copy()
@@ -242,6 +246,7 @@ if __name__ == "__main__":
         sc_position_lp_count = sc_positions_obs.groupby(["position_id"])[
             "liquidity_provider"].nunique().reset_index().rename(columns={"liquidity_provider": "lp_cnt"})
         sc_positions_obs = sc_positions_obs.merge(sc_position_lp_count, on=["position_id"], how='left')
+
         cols_to_divide = [
             'amount0', 'amount1', 'fee0', 'fee1', 'amount0_input', 'amount1_input', 'amount0_output', 'amount1_output',
             'amount', 'fee', 'amount_input', 'amount_output', 'amount0_last', 'amount1_last', 'amount_last',
@@ -251,16 +256,17 @@ if __name__ == "__main__":
         for col in cols_to_divide:
             sc_positions_obs.loc[more_than_one, col] = sc_positions_obs.loc[more_than_one, col] / sc_positions_obs.loc[
                 more_than_one, 'lp_cnt']
+
         sc_positions_obs["sc"] = True
         sc_positions_obs.drop(
-            columns=['insertion_date', 'liquidity_mpz', 'net_liquidity', 'sqrtPrice', 'leave_date', 'lp_cnt'],
+            columns=['insertion_date', 'sqrtPrice', 'leave_date', 'lp_cnt'],
             inplace=True)
         non_sc_positions["sc"] = False
         # Map non-sc-positions with liquidity providers
         non_sc_actions = action_df[~action_df["position_id"].isin(position_id_sc)]
         # Then for these actions we have to assume
         date_range = res_df.groupby(["position_id"]).agg(
-            {"date": ["min","max"]}
+            {"date": ["min", "max"]}
         )
 
         multiple_position_id_map = non_sc_actions.groupby(["position_id"])["liquidity_provider"].nunique()
@@ -281,57 +287,55 @@ if __name__ == "__main__":
                                              'buying_crypto_trade_cnt', 'buying_stable_trade_cnt', 'pool_address',
                                              'amount', 'fee', 'amount_input', 'amount_output', 'amount0_last',
                                              'amount1_last', 'amount_last', 'total_amount0', 'total_amount1',
-                                             'total_amount', 'sc']].copy()
-        daily_obs = pd.concat([sc_positions_obs, non_sc_positions], ignore_index=True)
-        daily_obs.sort_values(by=["liquidity_provider", "position_id", "date"])
-        daily_obs["daily_overall_roi"] = daily_obs["total_amount"] / daily_obs["amount_last"]
-        daily_obs["daily_amount_roi"] = daily_obs["amount"] / daily_obs["amount_last"]
-        daily_obs["daily_fee_roi"] = daily_obs["fee"] / daily_obs["amount_last"]
-        multiple_positions_new_cond = action_df.groupby(["position_id"]).agg(
-            max_date=("block_timestamp", "max"),
-            min_date=("block_timestamp", "min"),
-            mpz=("liquidity_mpz", "sum")
-        ).reset_index()
-        multiple_positions_new_cond["time_diff"] = (multiple_positions_new_cond["max_date"] - multiple_positions_new_cond["min_date"])
-        new_cond_for_position = (multiple_positions_new_cond["time_diff"] <= '1 hours') & (multiple_positions_new_cond["mpz"]==0)
-        ok_ids_new = multiple_positions_new_cond[~new_cond_for_position]["position_id"].unique()
-        daily_obs = daily_obs[daily_obs["position_id"].isin(ok_ids_new)]
-        lp_max_min_date_check = daily_obs.groupby(["liquidity_provider"]).agg(
-            max_date=("date", "max"),
-            min_date=("date", "min")
-        ).reset_index()
-        lp_max_min_date_check["date_diff"] = lp_max_min_date_check["max_date"] - lp_max_min_date_check["min_date"]
-        # at least one week in pool
-        ok_lp_ids = lp_max_min_date_check[lp_max_min_date_check["date_diff"] >= '7 days']["liquidity_provider"].unique()
-        daily_obs = daily_obs[daily_obs["liquidity_provider"].isin(ok_lp_ids)] # remove the lps that have lived too short amount of time
-        daily_obs["date"] = daily_obs["date"].astype(str)
-        weekly_obs = daily_obs.copy()
-        weekly_obs["week"] = pd.to_datetime(weekly_obs["date"]).dt.to_period('W-SAT').dt.start_time
-        weekly_obs["week"].astype(str)
-        # Switch back with amount input
-        weekly_obs["amount_last_temp"] = weekly_obs["amount_last"] - weekly_obs["amount_input"]
-        weekly_obs["amount_temp"] = weekly_obs["amount"] - weekly_obs["amount_output"]
-        lp_position_id_week = ["liquidity_provider", "position_id", "week"]
-        lp_position_week_groupby = weekly_obs.groupby(lp_position_id_week)
-        per_lp_per_position_week_end = lp_position_week_groupby["amount_last"].first()
-        per_lp_per_position_week_start = lp_position_week_groupby["amount"].last()
-        per_lp_per_position_amount_table = lp_position_week_groupby.agg({"amount_last_temp":"first", "amount_temp":"last", "fee":"sum", "amount_input":"sum", "amount_output":"sum", "daily_amount_roi": "prod", "sc": "mean", "active_perc":"mean" }).reset_index()
-        # add the amount input at the beginning of the week
-        per_lp_per_position_amount_table["amount_last_new"] = per_lp_per_position_amount_table["amount_last_temp"] +  per_lp_per_position_amount_table["amount_input"]
-        # add the amount output at the end of the week
-        per_lp_per_position_amount_table["amount_new"] = per_lp_per_position_amount_table["amount_temp"] +  per_lp_per_position_amount_table["amount_output"]
-        per_lp_per_position_amount_table["amt_roi_new"] = per_lp_per_position_amount_table["amount_new"] / per_lp_per_position_amount_table["amount_last_new"]
-        per_lp_per_position_amount_table["fee_roi_new"] = per_lp_per_position_amount_table["fee"] / per_lp_per_position_amount_table["amount_last_new"]
-        test1 = per_lp_per_position_amount_table.groupby(["liquidity_provider", "week"]).agg({"amount_last_new":"sum", "amount_new":"sum", "fee":"sum", "sc": "mean", "position_id": "nunique", "amount_input": "sum", "amount_output":"sum", "active_perc": "mean"}).reset_index()
-        # Now we also do the LP level action count
-        test1["amt_roi"] = test1["amount_new"] / test1["amount_last_new"]
-        test1["fee_roi"] = test1["fee"] / test1["amount_last_new"]
-        test1["overall_roi"] = test1["amt_roi"] + test1["fee_roi"]
-        test1["pool_addr"] = pool_addr
-        action_by_lp_week1 = action_df_for_week.groupby(["liquidity_provider", "week", "action"]).size().unstack(
-            fill_value=0).reset_index()
-        ret_data = pd.concat([ret_data, test1], ignore_index=True)
+                                             'total_amount', 'sc', 'net_liquidity', 'liquidity_mpz']].copy()
+        
+    amount_by_lp_actual.to_stata("amt_actual.dta", convert_dates={"week": "td"})
     ret_data["lp_id"] = pd.factorize(ret_data['liquidity_provider'])[0]
     ret_data["pool_id"] = pd.factorize(ret_data['pool_addr'])[0]
-    ret_data.to_pickle(os.path.join(data_folder_path, 'raw', 'pkl', "full_positions.pkl"))
-    ret_data.to_stata("no_short_lived_latest_please_work.dta", convert_dates={"week": "td"})
+    ret_data.to_pickle(os.path.join(data_folder_path, 'raw', 'pkl', "data_by_lp_0808.pkl"))
+    # Generate Data File
+    ret_data["sc_pct"] = ret_data["sc"]
+    ret_data["amount_roi"] = ret_data["amt_roi"]
+    ret_data["position_cnt"] = ret_data["position_id"]
+    result_df.to_pickle(os.path.join(data_folder_path, 'raw', 'pkl', "data_by_positions_0711.pkl"))
+    ret_data.to_pickle(os.path.join(data_folder_path, 'raw', 'pkl', "ret_data_0808.pkl"))
+    ret_data.to_stata("no_short_lived_latest_please_work_0808.dta", convert_dates={"week": "td"})
+    ret_data["amount_roi"] = ret_data["amt_roi"]
+    ret_data["sc_binary"] = ret_data["sc"] > 0
+    ret_data["more_than_one_pos"] = ret_data["position_cnt"] > 1
+    # todo: Calculate input output separately, from original file?
+    ret_data["id_var"] = ret_data["lp_id"].astype(str) + "_" + ret_data["pool_id"].astype(str)
+    ret_data.sort_values(by=["id_var", "week"], inplace=True)
+    ret_data["cum_amt_in"] = ret_data.groupby(["id_var"])['amount_input'].cumsum()
+    ret_data["cum_amt_out"] = ret_data.groupby(["id_var"])['amount_output'].cumsum()
+    ret_data["cum_amt_out"] = ret_data.groupby(["id_var"])['amount_output'].cumsum()
+    # deal with potential not continuous?
+    ret_data["last_week"] = ret_data.groupby("id_var")["week"].shift(1)
+    ret_data["not_continuous_for_lag"] = ret_data["week"] != ret_data["last_week"] + pd.DateOffset(days=7)
+    cond_for_not_continuous = (~ret_data["last_week"].isna()) & (ret_data["not_continuous_for_lag"])
+    not_continuous_id_vars = ret_data[cond_for_not_continuous]["id_var"].unique()
+    ret_data["keep_id_vars_cond1"] = ~ret_data["id_var"].isin(not_continuous_id_vars)
+    # remove large ROI?
+    large_ROI_id_vars = ret_data[ret_data["overall_roi"] > 1.4]["id_var"].unique()
+    ret_data["keep_id_vars_cond2"] = ~ret_data["id_var"].isin(large_ROI_id_vars)
+    # remove small LPs
+    ret_data_keep_id_vars_for_not_small_lp = ret_data[ret_data["cum_amt_in"] > 10]["id_var"].unique()
+    ret_data["keep_id_vars_cond3"] = ret_data["id_var"].isin(ret_data_keep_id_vars_for_not_small_lp)
+    # Now generate the ranks, after removing some variables
+    ret_data_to_keep_cond = ret_data["keep_id_vars_cond1"] & ret_data["keep_id_vars_cond2"] & ret_data["keep_id_vars_cond3"]
+    ret_data_kept = ret_data[ret_data_to_keep_cond].copy()
+    ret_data_kept["overall_roi_rank"] = ret_data_kept.groupby(["pool_id", "week"])["overall_roi"].rank(method='max', pct=True)
+    ret_data_kept["amount_roi_rank"] = ret_data_kept.groupby(["pool_id", "week"])["amount_roi"].rank(method='max', pct=True)
+    ret_data_kept["fee_roi_rank"] = ret_data_kept.groupby(["pool_id", "week"])["fee_roi"].rank(method='max', pct=True)
+    ret_data_kept["amount_in_rank"] = ret_data_kept.groupby(["pool_id", "week"])["cum_amt_in"].rank(method='max', pct=True)
+    ret_data_kept.sort_values(by=["id_var", "week"], inplace=True)
+    ret_data_kept["overall_roi_rank_lag"] = ret_data_kept.groupby(["id_var"])["overall_roi_rank"].shift(1)
+    ret_data_kept["amount_roi_rank_lag"] = ret_data_kept.groupby(["id_var"])["amount_roi_rank"].shift(1)
+    ret_data_kept["fee_roi_rank_lag"] = ret_data_kept.groupby(["id_var"])["fee_roi_rank"].shift(1)
+    ret_data_kept["amount_in_rank_lag"] = ret_data_kept.groupby(["id_var"])["amount_in_rank"].shift(1)
+    # todo: fix the nas
+    # df['moving'] = df.groupby('object').rolling(10)['value'].mean().reset_index(drop=True)
+    ret_data_kept["soph"] = ret_data_kept.groupby(["id_var"]).rolling(4)['amount_roi_rank_lag'].mean().reset_index(drop=True)
+    ret_data_kept.to_stata("no_short_lived_latest_please_work_0808_testing.dta", convert_dates={"week": "td"})
+
+    action_by_lp.to_stata("action_lp.dta", convert_dates={"week": "td"})
