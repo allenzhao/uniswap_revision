@@ -5,6 +5,7 @@ description = ""
 authors = ["Alle Zehan Zhao"]
 readme = "README.md"
 packages = [{include = "uniswap_eqality"}]
+package-mode = false
 
 [tool.poetry.dependencies]
 python = "^3.10, <3.12"
