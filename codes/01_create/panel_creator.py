@@ -1,10 +1,21 @@
 import os
+from typing import Dict, Any
 
 import pandas as pd
 from tqdm import tqdm
 from pandarallel import pandarallel
 
 from codes.shared_library.utils import POOL_ADDR, POOL_INFO, get_parent, UNISWAP_NFT_MANAGER, UNISWAP_MIGRATOR
+from codes.shared_library.position_utils import (
+    get_relevant_position_ids_for_increase_only,
+    get_relevant_position_ids_for_decrease,
+    get_last_operation
+)
+from codes.shared_library.data_utils import (
+    group_weighted_mean_factory,
+    calculate_roi,
+    cumsum_mpz
+)
 
 if __name__ == "__main__":
     debug = True
@@ -122,12 +133,6 @@ if __name__ == "__main__":
         only_increase_cond1 = per_lp_sc_count["DECREASE_LIQUIDITY"] == 0  # Only increase
 
 
-        def get_last_operation(x):
-            all_actions = x["action"].values
-            last_action = all_actions[-1] if len(all_actions) > 0 else 'NAN'
-            return last_action == 'INCREASE_LIQUIDITY'
-
-
         if debug:
             only_increase_cond2_lp_ids = sc_observations.sort_values(
                 ["nf_position_manager_address", "liquidity_provider", "block_timestamp", "action"]).groupby(
@@ -145,21 +150,9 @@ if __name__ == "__main__":
                 "block_timestamp"].min().reset_index()
 
 
-        def get_relevant_position_ids_for_increase_only(x, helper_df=sc_position_with_start_and_end_dates):
-            helper_df = helper_df.copy()
-            sc_addr = x["nf_position_manager_address"]
-            date = x["block_timestamp"]
-            cond1 = helper_df["nf_position_manager_address"] == sc_addr
-            cond2 = helper_df["date_max"] >= date
-            # that position has an end date later than the date being put into SC
-            cond = cond1 & cond2
-            pos_ids = helper_df[cond]["position_id"].unique()
-            return pos_ids
-
-
         if debug:
             only_increase_lp_init_date["pos_ids"] = only_increase_lp_init_date.apply(
-                get_relevant_position_ids_for_increase_only, axis=1)
+                lambda x: get_relevant_position_ids_for_increase_only(x, sc_position_with_start_and_end_dates), axis=1)
         else:
             only_increase_lp_init_date["pos_ids"] = only_increase_lp_init_date.parallel_apply(
                 get_relevant_position_ids_for_increase_only, axis=1)
@@ -187,23 +180,9 @@ if __name__ == "__main__":
         decreased_lps_with_dates.reset_index(inplace=True)
 
 
-        def get_relevant_position_ids_for_decrease(x, helper_df=sc_position_with_start_and_end_dates):
-            helper_df = helper_df.copy()
-            sc_addr = x["nf_position_manager_address"]
-            start_date = x["block_timestamp_min"]
-            end_date = x["block_timestamp_max"]
-
-            cond1 = helper_df["nf_position_manager_address"] == sc_addr
-            cond2 = helper_df["date_max"] >= start_date
-            cond3 = helper_df["date_min"] <= end_date
-            cond = cond1 & cond2 & cond3
-            pos_ids = helper_df[cond]["position_id"].unique()
-            return pos_ids
-
-
         if debug:
             decreased_lps_with_dates["pos_ids"] = decreased_lps_with_dates.apply(
-                get_relevant_position_ids_for_decrease, axis=1)
+                lambda x: get_relevant_position_ids_for_decrease(x, sc_position_with_start_and_end_dates), axis=1)
         else:
             decreased_lps_with_dates["pos_ids"] = decreased_lps_with_dates.parallel_apply(
                 get_relevant_position_ids_for_decrease, axis=1)
