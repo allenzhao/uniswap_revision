@@ -4,7 +4,12 @@ import pandas as pd
 from abc import ABC, abstractmethod
 
 from codes.shared_library.position_processor import BasePositionProcessor
-from codes.shared_library.utils import POOL_INFO, get_parent
+from codes.shared_library.utils import (
+    POOL_INFO, 
+    get_parent, 
+    UNISWAP_NFT_MANAGER, 
+    UNISWAP_MIGRATOR
+)
 from codes.shared_library.position_utils import (
     get_relevant_position_ids_for_increase_only,
     get_relevant_position_ids_for_decrease,
@@ -15,7 +20,6 @@ from codes.shared_library.data_utils import (
     calculate_roi,
     cumsum_mpz
 )
-from codes.shared_library.utils import POOL_INFO
 
 class PositionCreationTimeProcessor(BasePositionProcessor):
     def __init__(self, pool_addr: str, debug: bool = False):
@@ -114,11 +118,12 @@ class SCPositionProcessor(BasePositionProcessor):
         self.data_folder_path = os.path.join(get_parent(), "data")
         
     def process_positions(self) -> pd.DataFrame:
-        """Process smart contract position data."""
+        """Process smart contract position data with weekly aggregation."""
         # Load data
         data_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"input_info_{self.pool_addr}.pkl"))
         res_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"done_accounting_day_datas_{self.pool_addr}.pkl"))
         action_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"data_{self.pool_addr}_0626_no_short.pkl"))
+        false_sc_list = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'not_verified_sc_list.csv'))
         
         # Process position IDs
         data_df["position_id"] = data_df["position_id"].astype(str)
@@ -148,7 +153,40 @@ class SCPositionProcessor(BasePositionProcessor):
         sc_positions_created_date.rename(columns={"date": "sc_position_creation_date"}, inplace=True)
         res_df = res_df.merge(sc_positions_created_date, on="position_id", how="left")
         
-        return res_df
+        # Weekly aggregation
+        res_df["date"] = pd.to_datetime(res_df["date"])
+        res_df["week"] = res_df["date"].dt.to_period('W-SAT').dt.start_time
+        
+        # Calculate weekly metrics
+        weekly_metrics = res_df.groupby(["position_id", "week"]).agg({
+            "amount_last": "first",
+            "amount": "last",
+            "fee": "sum",
+            "amount_input": "sum",
+            "amount_output": "sum",
+            "active_perc": "mean",
+            "sc": "max",
+            "both_match": "max",
+            "net_liquidity": "last",
+            "liquidity_mpz": "last"
+        }).reset_index()
+        
+        # Calculate ROIs
+        weekly_metrics["daily_amount_roi"] = weekly_metrics["amount"] / weekly_metrics["amount_last"]
+        weekly_metrics["daily_fee_roi"] = weekly_metrics["fee"] / weekly_metrics["amount_last"]
+        weekly_metrics["daily_overall_roi"] = weekly_metrics["daily_amount_roi"] + weekly_metrics["daily_fee_roi"]
+        
+        # Add verification status
+        weekly_metrics["is_verified_sc"] = ~weekly_metrics["position_id"].isin(false_sc_list['0'].unique())
+        
+        # Calculate transaction fees
+        tx_fees = action_df.groupby(["position_id", "week"]).agg({
+            "tx_fee": ["mean", "sum", "median"]
+        }).reset_index()
+        tx_fees.columns = ["position_id", "week", "tx_fee_mean", "tx_fee_sum", "tx_fee_median"]
+        weekly_metrics = weekly_metrics.merge(tx_fees, on=["position_id", "week"], how="left")
+        
+        return weekly_metrics
         
     def _process_sc_positions(self, df: pd.DataFrame) -> pd.DataFrame:
         """Process smart contract specific metrics."""
