@@ -1,47 +1,25 @@
-import datetime
-import logging
 import os
-from scipy.stats.mstats import winsorize
+from typing import Dict, Any
 
-from parallel_pandas import ParallelPandas
-
-import math
+import pandas as pd
 from tqdm import tqdm
 
-import numpy as np
-import pandas as pd
-
-from codes.shared_library.utils import TICK_BASE, POOL_INFO, UNISWAP_NFT_MANAGER, Q96, POOL_ADDR, get_parent, \
-    POOL_TICK_QUERY_AT_GIVEN_BLOCK, query_graphql
+from codes.shared_library.utils import get_parent
+from codes.01_create.position_processors import PositionCreationTimeProcessor
 
 if __name__ == "__main__":
     result_df = pd.DataFrame()
     data_folder_path = os.path.join(get_parent(), "data")
     pickle_path = os.path.join(data_folder_path, 'raw', 'pkl')
-    pool_addrs = ['0x11b815efb8f581194ae79006d24e0d814b7697f6',
-                  '0x4e68ccd3e89f51c3074ca5072bbac773960dfa36',
-                  '0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640',
-                  '0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8']
-    pool_addrs_usdt = ['0x11b815efb8f581194ae79006d24e0d814b7697f6',
-                       '0x4e68ccd3e89f51c3074ca5072bbac773960dfa36']
-    pool_addrs_usdc = ['0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640',
-                       '0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8']
-    pool_addrs_4 = [
+    pool_addrs = [
         '0x4e68ccd3e89f51c3074ca5072bbac773960dfa36',
         '0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8',
-    ]  # these are the
-    data_folder_path = os.path.join(get_parent(), "data")
-    res_dfs = []
-    dfs = []
-    results = []
-    result_df = pd.DataFrame()
-    daily_prices = pd.read_csv(os.path.join(data_folder_path, "raw", 'daily_pool_agg_results.csv'))
-    weekly_prices = pd.read_csv(os.path.join(data_folder_path, "raw", 'weekly_pool_agg_results.csv'))
-    ret_data = pd.DataFrame()
-    action_by_lp = pd.DataFrame()
-    amount_by_lp_actual = pd.DataFrame()
-    res = []
-    for pool_addr in pool_addrs_4:
+    ]
+    
+    for pool_addr in pool_addrs:
+        processor = PositionCreationTimeProcessor(pool_addr, debug=True)
+        result = processor.process_positions()
+        result_df = pd.concat([result_df, result], ignore_index=True)
         temp_res = {}
         temp_res["pool_addr"] = pool_addr
 
