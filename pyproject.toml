@@ -21,6 +21,10 @@ matplotlib = "^3.8.2"
 seaborn = "^0.13.1"
 
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.4"
+pytest-cov = "^6.0.0"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
