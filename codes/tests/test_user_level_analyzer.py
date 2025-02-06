@@ -5,6 +5,8 @@ from datetime import datetime
 
 from codes.01_create.user_level_analyzer import UserLevelAnalyzer
 
+
+
 @pytest.fixture
 def sample_pool_addr():
     return '0x4e68ccd3e89f51c3074ca5072bbac773960dfa36'
