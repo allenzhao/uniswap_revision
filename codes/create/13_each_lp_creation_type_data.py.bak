@@ -1,0 +1,767 @@
+import os
+
+import numpy as np
+import pandas as pd
+from pandas import DataFrame
+from scipy.stats.mstats import winsorize
+
+from codes.shared_library.utils import POOL_INFO, UNISWAP_NFT_MANAGER, get_parent, \
+    UNISWAP_MIGRATOR
+
+if __name__ == "__main__":
+    result_df = pd.DataFrame()
+    data_folder_path = os.path.join(get_parent(), "data")
+    pickle_path = os.path.join(data_folder_path, 'raw', 'pkl')
+    pool_addrs = ['0x11b815efb8f581194ae79006d24e0d814b7697f6',
+                  '0x4e68ccd3e89f51c3074ca5072bbac773960dfa36',
+                  '0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640',
+                  '0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8']
+    pool_addrs_usdt = ['0x11b815efb8f581194ae79006d24e0d814b7697f6',
+                       '0x4e68ccd3e89f51c3074ca5072bbac773960dfa36']
+    pool_addrs_usdc = ['0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640',
+                       '0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8']
+    pool_addrs_4 = [
+        '0x4e68ccd3e89f51c3074ca5072bbac773960dfa36',
+        '0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8',
+    ]  # these are the
+    data_folder_path = os.path.join(get_parent(), "data")
+    res_dfs = []
+    dfs = []
+    results = []
+    result_df = pd.DataFrame()
+    daily_prices = pd.read_csv(os.path.join(data_folder_path, "raw", 'daily_pool_agg_results.csv'))
+    weekly_prices = pd.read_csv(os.path.join(data_folder_path, "raw", 'weekly_pool_agg_results.csv'))
+    ret_data = pd.DataFrame()
+    action_by_lp = pd.DataFrame()
+    amount_by_lp_actual = pd.DataFrame()
+    res = []
+    res_weekly_for_maggie = pd.DataFrame()
+    for pool_addr in pool_addrs_4:
+        temp_res = {}
+        temp_res["pool_addr"] = pool_addr
+
+        print(pool_addr)
+        data_df = pd.read_pickle(os.path.join(pickle_path, f"input_info_{pool_addr}.pkl"))
+        data_df["position_id"] = data_df["position_id"].astype(str)
+        data_df["sc"] = data_df["nf_position_manager_address"] != UNISWAP_NFT_MANAGER
+        # try to see if it is verified
+
+        temp_res["unique_lps"] = data_df["liquidity_provider"].unique().shape[0]
+        temp_res["positions"] = data_df["position_id"].unique().shape[0]
+        print(data_df.shape)
+        print(data_df["liquidity_provider"].unique().shape)
+        if pool_addr in pool_addrs_usdc:
+            upper_col = 'price_upper_0_1'
+            lower_col = 'price_lower_0_1'
+            token_price_col = 'token1_price'
+        else:
+            upper_col = 'price_upper_1_0'
+            lower_col = 'price_lower_1_0'
+            token_price_col = 'token0_price'
+        upper_perc = 2
+        lower_perc = 0.5
+        threshold = 0.01
+        if pool_addr not in pool_addrs_4:
+            upper_perc = 1.001
+            lower_perc = 0.999
+            threshold = 0.001
+        upper_to_lower = upper_perc / lower_perc
+        data_df["upper/current"] = data_df[upper_col] / data_df[token_price_col]
+        data_df["lower/current"] = data_df[lower_col] / data_df[token_price_col]
+        data_df["upper/lower"] = data_df[upper_col] / data_df[lower_col]
+        # print("Upper to be around recommended")
+        data_df["upper_match"] = np.abs(data_df["upper/current"] - upper_perc) <= threshold
+        # print(temp_res["upper_match"])
+        # print("Lower to be around recommended")
+        data_df["lower_match"] = np.abs(data_df["lower/current"] - lower_perc) <= threshold
+        # print(temp_res["lower_match"])
+        # print("Both Match")
+        data_df["both_match"] = (np.abs(data_df["lower/current"] - lower_perc) <= threshold) & (
+                np.abs(data_df["upper/current"] - upper_perc) <= threshold)
+        # print(temp_res["both_match"])
+        # print("Alternative_perc Match")
+        data_df["alternative_match_05"] = (data_df["tick_upper"] - data_df["tick_lower"] < 40) & (
+                data_df["upper/current"] >= 1) & (data_df["lower/current"] <= 1)
+        temp_res["alternative_match_05"] = sum(data_df["alternative_match_05"])
+        # print(temp_res["alternative_match_05"])
+        # print("Percentage to be around recommonded")
+        # print(data_df["upper/lower"].describe())
+        res.append(temp_res)
+        print(f"Working on f{pool_addr}")
+        daily_price = daily_prices[daily_prices["pool_address"] == pool_addr].copy()
+        weekly_price = weekly_prices[weekly_prices["pool_address"] == pool_addr].copy()
+        res_df = pd.read_pickle(
+            os.path.join(data_folder_path, 'raw', 'pkl', f"done_accounting_day_datas_{pool_addr}.pkl"))
+        res_df["position_id"] = res_df["position_id"].astype(str)
+        res_df = res_df.drop(columns=['open', 'high', 'low', 'close', 'high_tick', 'low_tick'])
+        cols_to_change_type = ['amount0', 'amount1', 'fee0', 'fee1']
+        res_df[cols_to_change_type] = res_df[cols_to_change_type].astype('float')
+        pool_info = POOL_INFO[pool_addr]
+        res_df = res_df.merge(daily_price, how='left', on='date')
+        res_df.sort_values(by=["position_id", "date"], inplace=True)
+        if pool_info.base_token0:
+            res_df["amount"] = res_df["close"] * res_df["amount1"] + res_df["amount0"]
+            res_df["fee"] = res_df["close"] * res_df["fee1"] + res_df["fee0"]
+            res_df["amount_input"] = res_df["open"] * res_df["amount1_input"] + res_df[
+                "amount0_input"]
+            res_df["amount_output"] = res_df["close"] * res_df[
+                "amount1_output"] + res_df["amount0_output"]
+        else:
+            res_df["amount"] = res_df["close"] * res_df["amount0"] + res_df["amount1"]
+            res_df["fee"] = res_df["close"] * res_df["fee0"] + res_df["fee1"]
+            res_df["amount_input"] = res_df["open"] * res_df["amount0_input"] + res_df[
+                "amount1_input"]
+            res_df["amount_output"] = res_df["close"] * res_df[
+                "amount0_output"] + res_df["amount1_output"]
+
+        res_df["amount0_last"] = res_df.groupby(["position_id"])["amount0"].shift(
+            1).fillna(0)
+        res_df["amount1_last"] = res_df.groupby(["position_id"])["amount1"].shift(
+            1).fillna(0)
+        res_df["amount_last"] = res_df.groupby(["position_id"])["amount"].shift(
+            1).fillna(0)
+        amount0_add_events = res_df["amount0_input"] > 0
+        amount1_add_events = res_df["amount1_input"] > 0
+        amount_add_events = res_df["amount_input"] > 0
+        res_df.loc[amount0_add_events, "amount0_last"] += res_df.loc[
+            amount0_add_events, "amount0_input"
+        ]
+        res_df.loc[amount1_add_events, "amount1_last"] += res_df.loc[
+            amount1_add_events, "amount1_input"
+        ]
+        res_df.loc[amount_add_events, "amount_last"] += res_df.loc[
+            amount_add_events, "amount_input"
+        ]
+
+        amount0_remove_events = res_df["amount0_output"] > 0
+        amount1_remove_events = res_df["amount1_output"] > 0
+        amount_remove_events = res_df["amount_output"] > 0
+        res_df.loc[amount0_remove_events, "amount0"] += res_df.loc[
+            amount0_remove_events, "amount0_output"
+        ]
+        res_df.loc[amount1_remove_events, "amount1"] += res_df.loc[
+            amount1_remove_events, "amount1_output"
+        ]
+        res_df.loc[amount_remove_events, "amount"] += res_df.loc[
+            amount_remove_events, "amount_output"
+        ]
+        res_df["total_amount0"] = res_df["amount0"] + res_df["fee0"]
+        res_df["total_amount1"] = res_df["amount1"] + res_df["fee1"]
+        res_df["total_amount"] = res_df["amount"] + res_df["fee"]
+        res_df = res_df[res_df["amount_last"] != 0].copy()
+        # Now we link positions with LPs - based on who carried out the action and what
+
+        action_df = pd.read_pickle(os.path.join(data_folder_path, 'raw', 'pkl', f"data_{pool_addr}_0626_no_short.pkl"))
+        action_df["position_id"] = action_df["position_id"].astype(str)
+        action_df_for_week = action_df.copy()
+        # Need a mapping like this:
+        # LP_ID, PositionID, Date
+        # We need a date range, i.e. when does that LP interacted with the position (special case for SC)
+        # Get the SC:
+        # cond1: not using UNISWAP_NFT_MANAGER as the nf_pos_manager (
+        sc_cond1 = action_df["nf_position_manager_address"] != UNISWAP_NFT_MANAGER
+        # There could also be whose to address is not UNISWAP_NFT_MANAGER
+        # This case we identify that position as an SC, in addition
+        # note: here include some positions that had multiple owners - we consider those SC positions also,
+        # for simplicity
+        one_position_id_has_multiple_lp_id = action_df.groupby(["position_id"])["liquidity_provider"].nunique()
+        position_id_multiple = one_position_id_has_multiple_lp_id[one_position_id_has_multiple_lp_id > 1].index
+        sc_cond2_pre = action_df["position_id"].isin(position_id_multiple)
+        sc_cond2 = (action_df["to_address"] != UNISWAP_NFT_MANAGER) & (
+                action_df["to_address"] != UNISWAP_MIGRATOR) & sc_cond2_pre
+        position_id_sc = action_df[(sc_cond1 | sc_cond2)]["position_id"].unique()
+        # get everyone that interacted with Uniswap through the SC:
+        sc_observations = action_df[action_df["position_id"].isin(position_id_sc)].copy()
+
+        res_df["date"] = pd.to_datetime(res_df["date"])
+
+        sc_position_with_start_and_end_dates = res_df[res_df["position_id"].isin(position_id_sc)].groupby(
+            ["position_id"]).agg({"date": ["min", "max"]})
+        sc_position_with_start_and_end_dates.columns = ["_".join(col) for col in
+                                                        sc_position_with_start_and_end_dates.columns]
+        sc_position_with_start_and_end_dates.reset_index(inplace=True)
+        # Then for each position, find the associated SC:
+        position_id_sc_map = sc_observations[["position_id", "nf_position_manager_address"]].drop_duplicates()
+        sc_position_with_start_and_end_dates = sc_position_with_start_and_end_dates.merge(position_id_sc_map,
+                                                                                          on='position_id', how='left')
+        # Then for each SC, figure out who interacted with position and when,
+        # to know when to map which SC to which position and during which period
+        per_lp_sc_count = sc_observations.groupby(["nf_position_manager_address", "liquidity_provider", "action"],
+                                                  observed=True).size().unstack(fill_value=0).reset_index()
+        # 1. Only observe deposit events for a given LP for a given SC
+        nft_and_lp = ["nf_position_manager_address", "liquidity_provider"]
+        only_increase_cond1 = per_lp_sc_count["DECREASE_LIQUIDITY"] == 0
+
+
+        # Only increase
+        def get_last_operation(x):
+            all_actions = x["action"].values
+            last_action = all_actions[-1] if len(all_actions) > 0 else 'NAN'
+            return last_action == 'INCREASE_LIQUIDITY'
+
+
+        only_increase_cond2_lp_ids = sc_observations.sort_values(
+            ["nf_position_manager_address", "liquidity_provider", "block_timestamp", "action"]).groupby(
+            nft_and_lp).apply(get_last_operation)
+        only_increase_cond2 = only_increase_cond2_lp_ids[only_increase_cond2_lp_ids].index.to_frame(index=False)
+        only_increase_lp = per_lp_sc_count[only_increase_cond1][nft_and_lp].copy()
+        only_increase_lp = pd.concat([only_increase_lp, only_increase_cond2], ignore_index=True)
+        # For these LP, we figure out their start date, i.e. the first interaction with SC
+        only_increase_lp_init_date = \
+            only_increase_lp.merge(sc_observations, on=nft_and_lp, how='left').groupby(nft_and_lp)[
+                "block_timestamp"].min().reset_index()
+
+
+        def get_relevant_position_ids_for_increase_only(x, helper_df=sc_position_with_start_and_end_dates):
+            helper_df = helper_df.copy()
+            sc_addr = x["nf_position_manager_address"]
+            date = x["block_timestamp"]
+            cond1 = helper_df["nf_position_manager_address"] == sc_addr
+            cond2 = helper_df["date_max"] >= date
+            # that position has an end date later than the date being put into SC
+            cond = cond1 & cond2
+            pos_ids = helper_df[cond]["position_id"].unique()
+            return pos_ids
+
+
+        only_increase_lp_init_date["pos_ids"] = only_increase_lp_init_date.apply(
+            get_relevant_position_ids_for_increase_only, axis=1)
+
+        # 2. Observe deposit & removals for a given LP for a given SC
+        # In this case we use the last *active* date for a given LP for a given SC
+        # as the last date for a position to belong to that particular LP
+        # , i.e. we assume that whenever there is a last operation
+        # also we require that the removal event is the last event (this is shown in increase only)
+        # So we need the ids that are not in the only_increase_lp_init_date
+
+        per_lp_sc_count["nft_and_lp"] = (
+                per_lp_sc_count["nf_position_manager_address"]
+                + "--"
+                + per_lp_sc_count["liquidity_provider"]
+        )
+        only_increase_lp_init_date["nft_and_lp"] = (
+                only_increase_lp_init_date["nf_position_manager_address"]
+                + "--"
+                + only_increase_lp_init_date["liquidity_provider"]
+        )
+        decreased_lp_cond = ~per_lp_sc_count["nft_and_lp"].isin(only_increase_lp_init_date["nft_and_lp"].unique())
+        decreased_lps = per_lp_sc_count[decreased_lp_cond][nft_and_lp].copy()
+        decreased_lps_with_dates = decreased_lps.merge(sc_observations, on=nft_and_lp, how='left').groupby(
+            nft_and_lp).agg({"block_timestamp": ["min", "max"]})
+        decreased_lps_with_dates.columns = ["_".join(col) for col in decreased_lps_with_dates.columns]
+        decreased_lps_with_dates.reset_index(inplace=True)
+
+
+        def get_relevant_position_ids_for_decrease(x, helper_df=sc_position_with_start_and_end_dates):
+            helper_df = helper_df.copy()
+            sc_addr = x["nf_position_manager_address"]
+            start_date = x["block_timestamp_min"]
+            end_date = x["block_timestamp_max"]
+
+            cond1 = helper_df["nf_position_manager_address"] == sc_addr
+            cond2 = helper_df["date_max"] >= start_date
+            cond3 = helper_df["date_min"] <= end_date
+            cond = cond1 & cond2 & cond3
+            pos_ids = helper_df[cond]["position_id"].unique()
+            return pos_ids
+
+
+        decreased_lps_with_dates["pos_ids"] = decreased_lps_with_dates.apply(
+            get_relevant_position_ids_for_decrease, axis=1)
+
+        sc_lp_position_map_part_one = only_increase_lp_init_date[
+            ["liquidity_provider", "block_timestamp", "pos_ids"]].explode("pos_ids").rename(
+            columns={"pos_ids": "position_id", "block_timestamp": "insertion_date"})
+        # todo: position id nans?
+        sc_lp_position_map_part_two = decreased_lps_with_dates[
+            ["liquidity_provider", "block_timestamp_min", "block_timestamp_max", "pos_ids"]].explode("pos_ids").rename(
+            columns={"pos_ids": "position_id", "block_timestamp_min": "insertion_date",
+                     "block_timestamp_max": "leave_date"})
+        # Next we want to create the LP-position level data.
+        # Note that we shall divide the SC LP positions based on the count
+        # (i.e. how many are there each day), this should be taken into consideration
+        # then for them we know:
+        # for part one:
+        sc_positions = res_df[res_df["position_id"].isin(position_id_sc)].copy()
+        non_sc_positions = res_df[~res_df["position_id"].isin(position_id_sc)].copy()
+        # Then our mapping should first duplicate the position observations
+        sc_positions_created_date = sc_positions.groupby(["position_id"])["date"].min().reset_index().rename(
+            columns={"date": "sc_position_creation_date"})
+        sc_positions = sc_positions.merge(sc_positions_created_date, how='left', on='position_id')
+        sc_positions_obs_part_one = sc_lp_position_map_part_one.merge(sc_positions, how='left', on='position_id')
+        sc_positions_obs_part_two = sc_lp_position_map_part_two.merge(sc_positions, how='left', on='position_id')
+
+        part_one_date_condition = sc_positions_obs_part_one["sc_position_creation_date"] >= sc_positions_obs_part_one[
+            "insertion_date"].dt.date
+        sc_positions_obs_part_one_final = sc_positions_obs_part_one[part_one_date_condition].copy()
+        part_two_date_condition_1 = sc_positions_obs_part_two["sc_position_creation_date"] >= sc_positions_obs_part_two[
+            "insertion_date"].dt.date
+        part_two_date_condition_2 = sc_positions_obs_part_two["date"] <= sc_positions_obs_part_two["leave_date"].dt.date
+        part_two_date_conditions = part_two_date_condition_1 & part_two_date_condition_2
+        sc_positions_obs_part_two_final = sc_positions_obs_part_two[part_two_date_conditions].copy()
+        sc_positions_obs = pd.concat([sc_positions_obs_part_one_final, sc_positions_obs_part_two_final],
+                                     ignore_index=True)
+
+        sc_position_lp_count = sc_positions_obs.groupby(["position_id"])[
+            "liquidity_provider"].nunique().reset_index().rename(columns={"liquidity_provider": "lp_cnt"})
+        sc_positions_obs = sc_positions_obs.merge(sc_position_lp_count, on=["position_id"], how='left')
+
+        cols_to_divide = [
+            'amount0', 'amount1', 'fee0', 'fee1', 'amount0_input', 'amount1_input', 'amount0_output', 'amount1_output',
+            'amount', 'fee', 'amount_input', 'amount_output', 'amount0_last', 'amount1_last', 'amount_last',
+            'total_amount0', 'total_amount1', 'total_amount'
+        ]
+        more_than_one = sc_positions_obs["lp_cnt"] > 1
+        for col in cols_to_divide:
+            sc_positions_obs.loc[more_than_one, col] = sc_positions_obs.loc[more_than_one, col] / sc_positions_obs.loc[
+                more_than_one, 'lp_cnt']
+
+        sc_positions_obs["sc"] = True
+        sc_positions_obs.drop(
+            columns=['insertion_date', 'sqrtPrice', 'leave_date', 'lp_cnt'],
+            inplace=True)
+        non_sc_positions["sc"] = False
+        # Map non-sc-positions with liquidity providers
+        non_sc_actions = action_df[~action_df["position_id"].isin(position_id_sc)]
+        # Then for these actions we have to assume
+        date_range = res_df.groupby(["position_id"]).agg(
+            {"date": ["min", "max"]}
+        )
+
+        multiple_position_id_map = non_sc_actions.groupby(["position_id"])["liquidity_provider"].nunique()
+        # todo: remove these for now take care later
+        multiple_position_id_to_remove = multiple_position_id_map[multiple_position_id_map > 1].index.to_list()
+        non_sc_positions = non_sc_positions[
+            ~non_sc_positions["position_id"].isin(multiple_position_id_to_remove)].copy()
+        non_sc_actions = non_sc_actions[~non_sc_actions["position_id"].isin(multiple_position_id_to_remove)].copy()
+        non_sc_position_lp_map = non_sc_actions[["position_id", "liquidity_provider"]].drop_duplicates()
+        non_sc_positions = non_sc_positions.merge(non_sc_position_lp_map, on=["position_id"], how='left')
+        non_sc_positions = non_sc_positions[['liquidity_provider', 'position_id', 'date', 'tick_lower', 'tick_upper',
+                                             'current_tick', 'amount0', 'amount1', 'fee0', 'fee1', 'price_range',
+                                             'active_perc', 'amount0_input', 'amount1_input', 'amount0_output',
+                                             'amount1_output', 'low', 'high', 'open', 'close', 'low_tick',
+                                             'high_tick', 'open_tick', 'close_tick', 'volume_crypto_abs',
+                                             'volume_stable_abs', 'volume_crypto_net', 'volume_stable_net',
+                                             'volume_usd', 'volume_crypto_net_usd', 'volume_stable_net_usd',
+                                             'buying_crypto_trade_cnt', 'buying_stable_trade_cnt', 'pool_address',
+                                             'amount', 'fee', 'amount_input', 'amount_output', 'amount0_last',
+                                             'amount1_last', 'amount_last', 'total_amount0', 'total_amount1',
+                                             'total_amount', 'sc', 'net_liquidity', 'liquidity_mpz']].copy()
+        daily_obs = pd.concat([sc_positions_obs, non_sc_positions], ignore_index=True)
+
+        # todo: this way maybe the amount input need to be re-calculated since simply dividing
+        #  won't make sense??
+        #  for now can we consider ROI only?
+        #  also need to confirm a count of the mixed strategy LPs - using SC
+        cols_to_keep = [
+            'position_id',
+            'sc',
+            'upper_match',
+            'lower_match',
+            'both_match',
+        ]
+        data_df_temp = data_df[cols_to_keep].copy()
+        daily_obs = daily_obs.merge(data_df_temp, how='left', on="position_id")
+        daily_obs["sc"] = daily_obs["sc_x"]
+        # daily_obs["filter_in"] = daily_obs["sc"] | daily_obs["both_match"]
+        # daily_obs = daily_obs[daily_obs["filter_in"]]
+        daily_obs.sort_values(by=["liquidity_provider", "position_id", "date"])
+        daily_obs["daily_overall_roi"] = daily_obs["total_amount"] / daily_obs["amount_last"]
+        daily_obs["daily_amount_roi"] = daily_obs["amount"] / daily_obs["amount_last"]
+        daily_obs["daily_fee_roi"] = daily_obs["fee"] / daily_obs["amount_last"]
+        multiple_positions_new_cond = action_df.groupby(["position_id"]).agg(
+            max_date=("block_timestamp", "max"),
+            min_date=("block_timestamp", "min"),
+            mpz=("liquidity_mpz", "sum")
+        ).reset_index()
+        multiple_positions_new_cond["time_diff"] = (
+                multiple_positions_new_cond["max_date"] - multiple_positions_new_cond["min_date"])
+        new_cond_for_position = (multiple_positions_new_cond["time_diff"] <= '1 hours') & (
+                multiple_positions_new_cond["mpz"] == 0)
+        ok_ids_new = multiple_positions_new_cond[~new_cond_for_position]["position_id"].unique()
+        daily_obs = daily_obs[daily_obs["position_id"].isin(ok_ids_new)]
+        lp_max_min_date_check = daily_obs.groupby(["liquidity_provider"]).agg(
+            max_date=("date", "max"),
+            min_date=("date", "min")
+        ).reset_index()
+        lp_max_min_date_check["date_diff"] = lp_max_min_date_check["max_date"] - lp_max_min_date_check["min_date"]
+        # check condition: at least one week in pool
+        ok_lp_ids = lp_max_min_date_check[lp_max_min_date_check["date_diff"] >= '7 days']["liquidity_provider"].unique()
+        daily_obs = daily_obs[
+            daily_obs["liquidity_provider"].isin(ok_lp_ids)]  # remove the lps that have lived too short amount of time
+        # check condition: cumsum > 10
+        daily_obs["date"] = daily_obs["date"].astype(str)
+        daily_obs["week"] = pd.to_datetime(daily_obs["date"]).dt.to_period('W-SAT').dt.start_time
+        daily_obs["week"].astype(str)
+        weekly_obs = daily_obs.copy()
+        # Switch back with amount input
+        weekly_obs["amount_last_temp"] = weekly_obs["amount_last"] - weekly_obs["amount_input"]
+        weekly_obs["amount_temp"] = weekly_obs["amount"] - weekly_obs["amount_output"]
+        lp_position_id_week = ["liquidity_provider", "position_id", "week"]
+        lp_position_week_groupby = weekly_obs.groupby(lp_position_id_week)
+        per_lp_per_position_week_end = lp_position_week_groupby["amount_last"].first()
+        per_lp_per_position_week_start = lp_position_week_groupby["amount"].last()
+        weekly_obs["complete_removal"] = weekly_obs["net_liquidity"] < 1024
+        weekly_obs["not_first"] = (weekly_obs["net_liquidity"] != weekly_obs["liquidity_mpz"])
+        per_lp_per_position_amount_table = lp_position_week_groupby.agg(
+            {"amount_last_temp": "first", "amount_temp": "last", "fee": "sum", "amount_input": "sum",
+             "amount_output": "sum", "daily_amount_roi": "prod", "sc": "mean", "active_perc": "mean",
+             "complete_removal": "mean", "not_first": "mean"}).reset_index()
+        # add the amount input at the beginning of the week
+        per_lp_per_position_amount_table["amount_last_new"] = (per_lp_per_position_amount_table["amount_last_temp"] +
+                                                               per_lp_per_position_amount_table["amount_input"])
+        # add the amount output at the end of the week
+        per_lp_per_position_amount_table["amount_new"] = (per_lp_per_position_amount_table["amount_temp"] +
+                                                          per_lp_per_position_amount_table["amount_output"])
+        per_lp_per_position_amount_table["amt_roi_new"] = (per_lp_per_position_amount_table["amount_new"] /
+                                                           per_lp_per_position_amount_table["amount_last_new"])
+        per_lp_per_position_amount_table["fee_roi_new"] = (per_lp_per_position_amount_table["fee"] /
+                                                           per_lp_per_position_amount_table["amount_last_new"])
+        per_lp_per_position_amount_table["sold_held"] = per_lp_per_position_amount_table["amount_output"] / \
+                                                        per_lp_per_position_amount_table["amount_last_new"]
+        per_lp_per_position_amount_table["bought_held"] = per_lp_per_position_amount_table["amount_input"] / \
+                                                          per_lp_per_position_amount_table["amount_new"]
+        larger_than_one_cond = per_lp_per_position_amount_table["sold_held"] > 1
+        per_lp_per_position_amount_table.loc[larger_than_one_cond, "sold_held"] = 1
+        larger_than_one_cond = per_lp_per_position_amount_table["bought_held"] > 1
+        per_lp_per_position_amount_table.loc[larger_than_one_cond, "bought_held"] = 1
+        per_lp_per_position_amount_table["sold_held_weighed_avg"] = per_lp_per_position_amount_table["sold_held"] * \
+                                                                    per_lp_per_position_amount_table["amount_last_new"]
+        per_lp_per_position_amount_table["bought_held_weighed_avg"] = per_lp_per_position_amount_table["bought_held"] * \
+                                                                      per_lp_per_position_amount_table[
+                                                                          "amount_last_new"]
+
+        test1 = per_lp_per_position_amount_table.groupby(["liquidity_provider", "week"]).agg(
+            {"amount_last_new": "sum", "amount_new": "sum", "fee": "sum", "sc": "mean", "position_id": "nunique",
+             "amount_input": "sum", "amount_output": "sum", "active_perc": "mean", "sold_held_weighed_avg": "sum",
+             "bought_held_weighed_avg": "sum"}).reset_index()
+        # Now we also do the LP level action count
+        test1["amt_roi"] = test1["amount_new"] / test1["amount_last_new"]
+        test1["fee_roi"] = test1["fee"] / test1["amount_last_new"]
+        test1["overall_roi"] = test1["amt_roi"] + test1["fee_roi"]
+        test1["sold_held_weighed_avg"] = test1["sold_held_weighed_avg"] / test1["amount_last_new"]
+        test1["bought_held_weighed_avg"] = test1["bought_held_weighed_avg"] / test1["amount_last_new"]
+        test1["pool_addr"] = pool_addr
+        action_df_for_week["week"] = action_df_for_week["block_timestamp"].dt.to_period('W-SAT').dt.start_time
+        action_df_for_week_items = action_df_for_week["action"] == "DECREASE_LIQUIDITY"
+        action_df_for_week["amount0_output_usd"] = 0
+        action_df_for_week.loc[action_df_for_week_items, "amount0_output_usd"] = action_df_for_week.loc[
+            action_df_for_week_items, "amount0_usd"]
+        action_df_for_week["amount1_output_usd"] = 0
+        action_df_for_week.loc[action_df_for_week_items, "amount1_output_usd"] = action_df_for_week.loc[
+            action_df_for_week_items, "amount1_usd"]
+        action_df_for_week["amount_output_usd"] = action_df_for_week["amount0_output_usd"] + action_df_for_week[
+            "amount1_output_usd"]
+        action_df_for_week_items = action_df_for_week["action"] == "INCREASE_LIQUIDITY"
+        action_df_for_week["amount0_input_usd"] = 0
+        action_df_for_week.loc[action_df_for_week_items, "amount0_input_usd"] = action_df_for_week.loc[
+            action_df_for_week_items, "amount0_usd"]
+        action_df_for_week["amount1_input_usd"] = 0
+        action_df_for_week.loc[action_df_for_week_items, "amount1_input_usd"] = action_df_for_week.loc[
+            action_df_for_week_items, "amount1_usd"]
+        action_df_for_week["amount_input_usd"] = action_df_for_week["amount0_input_usd"] + action_df_for_week[
+            "amount1_input_usd"]
+        action_df_for_week["position_id"] = action_df_for_week["position_id"].astype(str)
+        action_by_lp_position_week = action_df_for_week.groupby(["liquidity_provider", "position_id", "week", "action"],
+                                                                observed=True).size().unstack(
+            fill_value=0).reset_index().rename(
+            columns={"INCREASE_LIQUIDITY": "lp_position_deposits", "DECREASE_LIQUIDITY": "lp_position_removals",
+                     "FEE_COLLECTION": "lp_position_collect_fees"})
+        action_df_input_output_by_week = action_df_for_week.groupby(["liquidity_provider", "week"])[
+            ["amount_input_usd", "amount_output_usd"]].sum().reset_index()
+        action_by_lp_week = action_df_for_week.groupby(["liquidity_provider", "week", "action"],
+                                                       observed=True).size().unstack(
+            fill_value=0).reset_index().rename(
+            columns={"INCREASE_LIQUIDITY": "lp_deposits", "DECREASE_LIQUIDITY": "lp_removals",
+                     "FEE_COLLECTION": "lp_collect_fees"})
+        test1 = test1.merge(action_by_lp_week, on=["liquidity_provider", "week"], how='left')
+        action_by_position_week = action_df_for_week.groupby(["position_id", "week", "action"],
+                                                             observed=True).size().unstack(
+            fill_value=0).reset_index().rename(
+            columns={"INCREASE_LIQUIDITY": "position_deposits", "DECREASE_LIQUIDITY": "position_removals",
+                     "FEE_COLLECTION": "position_collect_fees"})
+        # add up tx_fee (gas fee)
+        tx_fee_res_per_action = action_df_for_week.groupby(["position_id", "week", "action"], observed=True).agg(
+            mean_fee=('tx_fee', 'mean'),
+            sum_fee=('tx_fee', 'sum'),
+            median_fee=('tx_fee', 'median'),
+        ).reset_index()
+        tx_fee_res_per_pid = action_df_for_week.groupby(["position_id", "week"], observed=True).agg(
+            mean_fee=('tx_fee', 'mean'),
+            sum_fee=('tx_fee', 'sum'),
+            median_fee=('tx_fee', 'median'),
+        ).reset_index()
+        daily_obs_merged_with_tx_fee_res = daily_obs.merge(tx_fee_res_per_pid, on=["position_id", "week"], how='left').fillna(0)
+        # tx_fee graph, based on action and group type SC
+        # sc =
+        action_df_for_week["sc"] = action_df_for_week["position_id"].isin(position_id_sc)
+        tx_fee_res_sc = action_df_for_week.groupby(["sc", "week", "action"], observed=True).agg(
+            mean_fee=('tx_fee', 'mean'),
+            sum_fee=('tx_fee', 'sum'),
+            median_fee=('tx_fee', 'median'),
+        ).reset_index()
+        tx_fee_res_sc.to_pickle("tx_fee_"+pool_addr+".pkl")
+        # map position to LP
+        per_lp_per_position_amount_table["position_id"] = per_lp_per_position_amount_table["position_id"].astype(str)
+        per_lp_per_position_amount_table = per_lp_per_position_amount_table.merge(action_by_lp_position_week,
+                                                                                  on=["liquidity_provider",
+                                                                                      "position_id", "week"],
+                                                                                  how='left')
+        per_lp_per_position_amount_table = per_lp_per_position_amount_table.merge(action_by_lp_week,
+                                                                                  on=["liquidity_provider", "week"],
+                                                                                  how='left')
+        per_lp_per_position_amount_table = per_lp_per_position_amount_table.merge(action_by_position_week,
+                                                                                  on=["position_id", "week"],
+                                                                                  how='left')
+        daily_obs_temp = daily_obs.copy()
+        daily_obs = test1
+
+        daily_obs["daily_overall_roi"] = daily_obs["overall_roi"]
+        daily_obs["daily_amount_roi"] = daily_obs["amt_roi"]
+        daily_obs["daily_fee_roi"] = daily_obs["fee_roi"]
+
+        # winsorize extreme values
+        daily_obs['daily_overall_roi_w1'] = winsorize(daily_obs['daily_overall_roi'], limits=[0.01, 0.01])
+        daily_obs['daily_overall_roi_w5'] = winsorize(daily_obs['daily_overall_roi'], limits=[0.05, 0.05])
+        daily_obs['daily_overall_roi_w10'] = winsorize(daily_obs['daily_overall_roi'], limits=[0.10, 0.010])
+
+        daily_obs['daily_amount_roi_w1'] = winsorize(daily_obs['daily_amount_roi'], limits=[0.01, 0.01])
+        daily_obs['daily_amount_roi_w5'] = winsorize(daily_obs['daily_amount_roi'], limits=[0.05, 0.05])
+        daily_obs['daily_amount_roi_w10'] = winsorize(daily_obs['daily_amount_roi'], limits=[0.10, 0.010])
+
+        daily_obs['daily_fee_roi_w1'] = winsorize(daily_obs['daily_fee_roi'], limits=[0.01, 0.01])
+        daily_obs['daily_fee_roi_w5'] = winsorize(daily_obs['daily_fee_roi'], limits=[0.05, 0.05])
+        daily_obs['daily_fee_roi_w10'] = winsorize(daily_obs['daily_fee_roi'], limits=[0.10, 0.010])
+
+        daily_obs["overall_earning"] = daily_obs["daily_overall_roi"] >= 1
+        daily_obs["in_range"] = daily_obs["active_perc"] > 0
+
+
+        def qtile_25(x):
+            return x.quantile(0.25)
+
+
+        def qtile_75(x):
+            return x.quantile(0.75)
+
+
+        # daily_obs["age"] = daily_obs.groupby(["position_id"]).cumcount()
+
+        # create weekly LP mappings
+        lp_mapping = daily_obs_temp.groupby(["liquidity_provider", "week"]).agg(
+            sc_usage_avg=('sc', 'mean'),
+            rec_usage_avg=('both_match', 'mean'),
+        ).reset_index()
+        fee_mapping = daily_obs_merged_with_tx_fee_res.groupby(["liquidity_provider", "week"]).agg(
+            mean_tx_fee=('mean_fee', 'mean'),
+            sum_tx_fee=('sum_fee', 'sum'),
+        ).reset_index().fillna(0)
+        # lp_mapping["lp_type"] = 'default'
+        # use sc only
+        # lp_mapping["sc_binary"] = (lp_mapping["sc_usage_avg"] > 0)
+        # todo: different for sc. now we are considering everyone who use sc the sc type
+        # dummy recommendation only
+        # lp_mapping["rec_binary"] = (lp_mapping["rec_usage_avg"] > 0)
+        # todo: sc + rec is very rare (2579)
+        # four types:
+        # sc=True + rec=True:
+        # sc_usage_avg > 0:
+        # subset1 = lp_mapping[lp_mapping["sc_usage_avg"]> 0].copy()
+        # subset2 = subset1[subset1["sc_usage_avg"] < 1].copy()
+        # subset2[subset2["rec_usage_avg"] > 0]["liquidity_provider"].nunique()
+        lp_mapping_sc_user = lp_mapping["sc_usage_avg"] > 0
+        lp_mapping_rec_only_user = (lp_mapping["rec_usage_avg"] == 1) & (lp_mapping["sc_usage_avg"] == 0)
+        lp_mapping_manual_only_user = (lp_mapping["rec_usage_avg"] == 0) & (lp_mapping["sc_usage_avg"] == 0)
+        lp_mapping_rec_manual_mixed = (lp_mapping["rec_usage_avg"] > 0) & (lp_mapping["rec_usage_avg"] < 1) & (
+                lp_mapping["sc_usage_avg"] == 0)
+
+        # note: other is only needed when we do not specify 'sc_usage_avg' > 0. All others -> obsorbed
+        lp_mapping['lp_type'] = 'other'
+        lp_mapping.loc[lp_mapping_rec_only_user, 'lp_type'] = 'rec_only'
+        lp_mapping.loc[lp_mapping_manual_only_user, 'lp_type'] = 'manual_only'
+        lp_mapping.loc[lp_mapping_rec_manual_mixed, 'lp_type'] = 'rec_and_manual_mixed'
+        lp_mapping.loc[lp_mapping_sc_user, 'lp_type'] = 'sc_only'
+        lp_mapping = lp_mapping[['liquidity_provider', 'week', 'sc_usage_avg', 'rec_usage_avg', 'lp_type', ]].copy()
+        lp_mapping = lp_mapping.merge(fee_mapping, on=["liquidity_provider", "week"], how='left').fillna(0)
+        daily_obs = daily_obs.merge(lp_mapping, how='left', on=["liquidity_provider", "week"])
+
+        # daily_obs.
+
+        # mixed strategy of
+
+        # daily_obs["lp_type"] = "sc"
+        # daily_obs.loc[daily_obs_mixed_lp_position, "lp_type"] = "mixed"
+        # daily_obs.loc[daily_obs_rec_lp_position, "lp_type"] = "rec"
+        # daily_obs.loc[daily_obs_manual_lp_position, "lp_type"] = "manual"
+
+        # Note: here we might didn't discriminate based on > 1 lps?
+        print("Here")
+
+        # group by both_match and daily and then generate a new df.
+
+        # check for mixed strategy:
+        # rec_group = daily_obs[daily_obs["both_match"]]
+        # default_group = daily_obs[(~daily_obs["both_match"]) & (~daily_obs["sc"])]
+        # rec_group_pos_ids = rec_group["position_id"].unique()
+        # default_group_pos_ids = default_group["position_id"].unique()
+        # rec_group_lp_ids = pd.Series(
+        #     data_df[data_df["position_id"].isin(rec_group_pos_ids)]["liquidity_provider"].unique())
+        # manual_group_lp_ids = pd.Series(
+        #     data_df[data_df["position_id"].isin(default_group_pos_ids)]["liquidity_provider"].unique())
+        # both_rec_and_default_lp_ids = rec_group_lp_ids[rec_group_lp_ids.isin(manual_group_lp_ids)]
+        # rec_group_only_lp_ids = rec_group_lp_ids[~rec_group_lp_ids.isin(manual_group_lp_ids)]
+        # manual_group_only_lp_ids = manual_group_lp_ids[~manual_group_lp_ids.isin(rec_group_lp_ids)]
+        #
+        # positions_by_mixed_lps = pd.Series(
+        #     data_df[data_df["liquidity_provider"].isin(both_rec_and_default_lp_ids)]["position_id"].unique())
+        # position_by_rec_lps = pd.Series(
+        #     data_df[data_df["liquidity_provider"].isin(rec_group_only_lp_ids)]["position_id"].unique())
+        # position_by_manual_lps = pd.Series(
+        #     data_df[data_df["liquidity_provider"].isin(manual_group_only_lp_ids)]["position_id"].unique())
+        #
+        # daily_obs_mixed_lp_position = daily_obs["position_id"].isin(positions_by_mixed_lps)
+        # daily_obs_rec_lp_position = daily_obs["position_id"].isin(position_by_rec_lps)
+        # daily_obs_manual_lp_position = daily_obs["position_id"].isin(position_by_manual_lps)
+        #
+        result_filtered_out = False
+        #
+        # lps_position_cnt = data_df.groupby(["liquidity_provider"])["position_id"].nunique()
+        # lps_more_than_one_pos = lps_position_cnt[lps_position_cnt > 1].index.unique()
+        # positions_by_multiple_lps = data_df[data_df["liquidity_provider"].isin(lps_more_than_one_pos)][
+        #     "position_id"].unique()
+        # daily_obs_multiple_lp_position = daily_obs["position_id"].isin(positions_by_multiple_lps)
+        #
+        # daily_obs["more_than_one_pos"] = False
+        # daily_obs.loc[daily_obs_multiple_lp_position, "more_than_one_pos"] = True
+        #
+        # if result_filtered_out:
+        #     daily_obs = daily_obs[daily_obs["more_than_one_pos"]].copy()
+        #
+        # daily_obs["lp_type"] = "sc"
+        # daily_obs.loc[daily_obs_mixed_lp_position, "lp_type"] = "mixed"
+        # daily_obs.loc[daily_obs_rec_lp_position, "lp_type"] = "rec"
+        # daily_obs.loc[daily_obs_manual_lp_position, "lp_type"] = "manual"
+        cols_to_keep_new = ["pool_addr", "liquidity_provider", "week", "overall_roi", "amt_roi", "fee_roi", "fee",
+                            'amt', 'amt_last', 'amount_input', 'amount_output', "position_cnt", "active_perc",
+                            'sc_usage_avg', 'rec_usage_avg', 'lp_type', 'mean_tx_fee', 'sum_tx_fee']
+
+        # test1 = per_lp_per_position_amount_table.groupby(["liquidity_provider", "week"]).agg(
+        #     {"amount_last_new": "sum", "amount_new": "sum", "fee": "sum", "sc": "mean", "position_id": "nunique",
+        #      "amount_input": "sum", "amount_output": "sum", "active_perc": "mean", "sold_held_weighed_avg": "sum",
+        #      "bought_held_weighed_avg": "sum"}).reset_index()
+        res_weekly_temp: DataFrame = daily_obs.rename(columns={"position_id": "position_cnt",
+                                                               "amount_last_new": "amt_last",
+                                                               "amount_new": "amt"})[cols_to_keep_new]
+        res_weekly_for_maggie = pd.concat([res_weekly_for_maggie, res_weekly_temp], ignore_index=True)
+
+        #  mixed strategy, based on LP, could be better?
+        final_grp_by_cond = ["lp_type", "week", ]
+        # final_grp_by_cond = ["both_match",
+        #                      "sc",
+        #                      "date",
+        #                      ]
+
+        daily_by_group = daily_obs.groupby(final_grp_by_cond).agg(
+            daily_overall_avg=('daily_overall_roi', 'mean'),
+            daily_overall_avg_w1=('daily_overall_roi_w1', 'mean'),
+            daily_overall_avg_w5=('daily_overall_roi_w5', 'mean'),
+            daily_overall_avg_w10=('daily_overall_roi_w10', 'mean'),
+            daily_amt_avg=('daily_amount_roi', 'mean'),
+            daily_amt_avg_w1=('daily_amount_roi_w1', 'mean'),
+            daily_amt_avg_w5=('daily_amount_roi_w5', 'mean'),
+            daily_amt_avg_w10=('daily_amount_roi_w10', 'mean'),
+            daily_fee_avg=('daily_fee_roi', 'mean'),
+            daily_fee_avg_w1=('daily_fee_roi_w1', 'mean'),
+            daily_fee_avg_w5=('daily_fee_roi_w5', 'mean'),
+            daily_fee_avg_w10=('daily_fee_roi_w10', 'mean'),
+            daily_overall_median=('daily_overall_roi', 'median'),
+            daily_overall_median_w1=('daily_overall_roi_w1', 'median'),
+            daily_overall_median_w5=('daily_overall_roi_w5', 'median'),
+            daily_overall_median_w10=('daily_overall_roi_w10', 'median'),
+            daily_amt_median=('daily_amount_roi', 'median'),
+            daily_amt_median_w1=('daily_amount_roi_w1', 'median'),
+            daily_amt_median_w5=('daily_amount_roi_w5', 'median'),
+            daily_amt_median_w10=('daily_amount_roi_w10', 'median'),
+            daily_fee_median=('daily_fee_roi', 'median'),
+            daily_fee_median_w1=('daily_fee_roi_w1', 'median'),
+            daily_fee_median_w5=('daily_fee_roi_w5', 'median'),
+            daily_fee_median_w10=('daily_fee_roi_w10', 'median'),
+            daily_overall_min=('daily_overall_roi', 'min'),
+            daily_overall_min_w1=('daily_overall_roi_w1', 'min'),
+            daily_overall_min_w5=('daily_overall_roi_w5', 'min'),
+            daily_overall_min_w10=('daily_overall_roi_w10', 'min'),
+            daily_amt_min=('daily_amount_roi', 'min'),
+            daily_amt_min_w1=('daily_amount_roi_w1', 'min'),
+            daily_amt_min_w5=('daily_amount_roi_w5', 'min'),
+            daily_amt_min_w10=('daily_amount_roi_w10', 'min'),
+            daily_fee_min=('daily_fee_roi', 'min'),
+            daily_fee_min_w1=('daily_fee_roi_w1', 'min'),
+            daily_fee_min_w5=('daily_fee_roi_w5', 'min'),
+            daily_fee_min_w10=('daily_fee_roi_w10', 'min'),
+            daily_overall_max=('daily_overall_roi', 'max'),
+            daily_overall_max_w1=('daily_overall_roi_w1', 'max'),
+            daily_overall_max_w5=('daily_overall_roi_w5', 'max'),
+            daily_overall_max_w10=('daily_overall_roi_w10', 'max'),
+            daily_amt_max=('daily_amount_roi', 'max'),
+            daily_amt_max_w1=('daily_amount_roi_w1', 'max'),
+            daily_amt_max_w5=('daily_amount_roi_w5', 'max'),
+            daily_amt_max_w10=('daily_amount_roi_w10', 'max'),
+            daily_fee_max=('daily_fee_roi', 'max'),
+            daily_fee_max_w1=('daily_fee_roi_w1', 'max'),
+            daily_fee_max_w5=('daily_fee_roi_w5', 'max'),
+            daily_fee_max_w10=('daily_fee_roi_w10', 'max'),
+            daily_overall_std=('daily_overall_roi', 'std'),
+            daily_overall_std_w1=('daily_overall_roi_w1', 'std'),
+            daily_overall_std_w5=('daily_overall_roi_w5', 'std'),
+            daily_overall_std_w10=('daily_overall_roi_w10', 'std'),
+            daily_amt_std=('daily_amount_roi', 'std'),
+            daily_amt_std_w1=('daily_amount_roi_w1', 'std'),
+            daily_amt_std_w5=('daily_amount_roi_w5', 'std'),
+            daily_amt_std_w10=('daily_amount_roi_w10', 'std'),
+            daily_fee_std=('daily_fee_roi', 'std'),
+            daily_fee_std_w1=('daily_fee_roi_w1', 'std'),
+            daily_fee_std_w5=('daily_fee_roi_w5', 'std'),
+            daily_fee_std_w10=('daily_fee_roi_w10', 'std'),
+            daily_overall_q25=('daily_overall_roi', qtile_25),
+            # daily_overall_q25_w1=('daily_overall_roi_w1', qtile_25),
+            # daily_overall_q25_w5=('daily_overall_roi_w5', qtile_25),
+            # daily_overall_q25_w10=('daily_overall_roi_w10', qtile_25),
+            daily_amt_q25=('daily_amount_roi', qtile_25),
+            # daily_amt_q25_w1=('daily_amount_roi_w1', qtile_25),
+            # daily_amt_q25_w5=('daily_amount_roi_w5', qtile_25),
+            # daily_amt_q25_w10=('daily_amount_roi_w10', qtile_25),
+            daily_fee_q25=('daily_fee_roi', qtile_25),
+            # daily_fee_q25_w1=('daily_fee_roi_w1', qtile_25),
+            # daily_fee_q25_w5=('daily_fee_roi_w5', qtile_25),
+            # daily_fee_q25_w10=('daily_fee_roi_w10', qtile_25),
+            daily_overall_q75=('daily_overall_roi', qtile_75),
+            # daily_overall_q75_w1=('daily_overall_roi_w1', qtile_75),
+            # daily_overall_q75_w5=('daily_overall_roi_w5', qtile_75),
+            # daily_overall_q75_w10=('daily_overall_roi_w10', qtile_75),
+            daily_amt_q75=('daily_amount_roi', qtile_75),
+            # daily_amt_q75_w1=('daily_amount_roi_w1', qtile_75),
+            # daily_amt_q75_w5=('daily_amount_roi_w5', qtile_75),
+            # daily_amt_q75_w10=('daily_amount_roi_w10', qtile_75),
+            daily_fee_q75=('daily_fee_roi', qtile_75),
+            # daily_fee_q75_w1=('daily_fee_roi_w1', qtile_75),
+            # daily_fee_q75_w5=('daily_fee_roi_w5', qtile_75),
+            # daily_fee_q75_w10=('daily_fee_roi_w10', qtile_75),
+            # alive_positions=('position_id', 'nunique'),
+            # amt_in_daily=('amount_input', 'sum'),
+            # money_in_pool_total=('amount_last', 'sum'),
+            # money_in_pool_avg=('amount_last', 'mean'),
+            # money_in_pool_median=('amount_last', 'median'),
+            # daily_price=('close', 'mean'),
+            # overall_earning_count=('overall_earning', 'sum'),
+            # overall_in_range=('in_range', 'sum'),
+            # age_avg=('age', 'mean'),
+            # age_median=('age', 'median'),
+        ).reset_index()
+        agg_type = 'week'
+        daily_by_group.to_csv("result_filtered" + str(
+            result_filtered_out) + pool_addr + "_" + agg_type + "_" + "_test_other_info_0103.csv")
+    # result_df.to_csv("block_liquidity_and_tick.csv")
+    res_weekly_for_maggie["week"] = res_weekly_for_maggie["week"].dt.date
+    res_weekly_for_maggie.to_csv("240117_lp_data_with_sc_and_rec_usage.csv", index=False)
+    my_res = pd.DataFrame(res)
+    print("Done")
