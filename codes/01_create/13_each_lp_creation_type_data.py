@@ -8,8 +8,6 @@ from tqdm import tqdm
 from codes.shared_library.utils import get_parent
 from codes.01_create.position_processors import LPCreationProcessor
 
-
-
 if __name__ == "__main__":
     result_df = pd.DataFrame()
     pool_addrs = [
