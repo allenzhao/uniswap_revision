@@ -49,17 +49,40 @@ class UserLevelAnalyzer:
             self.false_sc_list = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'not_verified_sc_list.csv'))
             self.sc_verification_data = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'sc_verified_data.csv'))
         
-        self.res_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"done_accounting_day_datas_{self.pool_addr}.pkl"))
-        self.res_df["position_id"] = self.res_df["position_id"].astype(str)
-        
-        self.action_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"data_{self.pool_addr}_0626_no_short.pkl"))
-        self.action_df["position_id"] = self.action_df["position_id"].astype(str)
+        if test_data is not None:
+            # Use sample data for testing
+            self.res_df = test_data.copy()
+            self.res_df["position_id"] = self.res_df["nf_token_id"].astype(str)
+            self.action_df = test_data.copy()
+            self.action_df["position_id"] = self.action_df["nf_token_id"].astype(str)
+        else:
+            self.res_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"done_accounting_day_datas_{self.pool_addr}.pkl"))
+            self.res_df["position_id"] = self.res_df["position_id"].astype(str)
+            self.action_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"data_{self.pool_addr}_0626_no_short.pkl"))
+            self.action_df["position_id"] = self.action_df["position_id"].astype(str)
         
     def process_amounts(self) -> None:
         """Process amount calculations."""
-        self.res_df = self.res_df.drop(columns=['open', 'high', 'low', 'close', 'high_tick', 'low_tick'])
-        cols_to_change_type = ['amount0', 'amount1', 'fee0', 'fee1']
+        drop_cols = ['open', 'high', 'low', 'close', 'high_tick', 'low_tick']
+        self.res_df = self.res_df.drop(columns=[col for col in drop_cols if col in self.res_df.columns])
+        
+        # Add required columns for testing if they don't exist
+        required_cols = {
+            'amount0': 1.0, 'amount1': 1.0, 'fee0': 1.0, 'fee1': 1.0,
+            'amount0_input': 0.0, 'amount1_input': 0.0,
+            'amount0_output': 0.0, 'amount1_output': 0.0,
+            'active_perc': 1.0, 'liquidity_mpz': '100'
+        }
+        for col, default_val in required_cols.items():
+            if col not in self.res_df.columns:
+                self.res_df[col] = default_val
+        
+        cols_to_change_type = ['amount0', 'amount1', 'fee0', 'fee1',
+                              'amount0_input', 'amount1_input',
+                              'amount0_output', 'amount1_output']
         self.res_df[cols_to_change_type] = self.res_df[cols_to_change_type].astype('float')
+        if 'liquidity_mpz' in self.res_df.columns:
+            self.res_df['liquidity_mpz'] = self.res_df['liquidity_mpz'].astype(str)
         
         daily_price = self.daily_prices[self.daily_prices["pool_address"] == self.pool_addr].copy()
         self.res_df = self.res_df.merge(daily_price, how='left', on='date')
