@@ -67,15 +67,41 @@ class LPCreationProcessor(BasePositionProcessor):
     def __init__(self, pool_addr: str, debug: bool = False):
         super().__init__(pool_addr, debug)
         self.pool_info = POOL_INFO[pool_addr]
+        self.data_folder_path = os.path.join(get_parent(), "data")
         
     def process_positions(self) -> pd.DataFrame:
-        df = self.data.copy()
-        df = self.process_amount_events(df)
-        df = calculate_roi(df)
-        df = self._calculate_lp_metrics(df)
-        return df
+        """Process LP position data with type analysis."""
+        # Load data
+        data_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"input_info_{self.pool_addr}.pkl"))
+        res_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"done_accounting_day_datas_{self.pool_addr}.pkl"))
+        action_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"data_{self.pool_addr}_0626_no_short.pkl"))
+        
+        # Process position IDs
+        data_df["position_id"] = data_df["position_id"].astype(str)
+        res_df["position_id"] = res_df["position_id"].astype(str)
+        action_df["position_id"] = action_df["position_id"].astype(str)
+        
+        # Identify SC positions
+        sc_cond1 = action_df["nf_position_manager_address"] != UNISWAP_NFT_MANAGER
+        multiple_owners = action_df.groupby("position_id")["liquidity_provider"].nunique()
+        position_id_multiple = multiple_owners[multiple_owners > 1].index
+        sc_cond2 = (action_df["position_id"].isin(position_id_multiple)) & \
+                   (action_df["to_address"] != UNISWAP_NFT_MANAGER) & \
+                   (action_df["to_address"] != UNISWAP_MIGRATOR)
+        position_id_sc = action_df[(sc_cond1 | sc_cond2)]["position_id"].unique()
+        
+        # Process amounts and calculate ROIs
+        res_df = self.process_amount_events(res_df)
+        res_df = calculate_roi(res_df)
+        
+        # Add LP type information
+        res_df["sc"] = res_df["position_id"].isin(position_id_sc)
+        res_df = self._calculate_lp_metrics(res_df)
+        
+        return res_df
         
     def _calculate_lp_metrics(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate LP-specific metrics."""
         df["lp_type"] = "sc"
         df.loc[df["both_match"], "lp_type"] = "rec"
         df.loc[(~df["both_match"]) & (~df["sc"]), "lp_type"] = "manual"
@@ -85,15 +111,48 @@ class SCPositionProcessor(BasePositionProcessor):
     def __init__(self, pool_addr: str, debug: bool = False):
         super().__init__(pool_addr, debug)
         self.pool_info = POOL_INFO[pool_addr]
+        self.data_folder_path = os.path.join(get_parent(), "data")
         
     def process_positions(self) -> pd.DataFrame:
-        df = self.data.copy()
-        df = self.process_amount_events(df)
-        df = calculate_roi(df)
-        df = self._process_sc_positions(df)
-        return df
+        """Process smart contract position data."""
+        # Load data
+        data_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"input_info_{self.pool_addr}.pkl"))
+        res_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"done_accounting_day_datas_{self.pool_addr}.pkl"))
+        action_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"data_{self.pool_addr}_0626_no_short.pkl"))
+        
+        # Process position IDs
+        data_df["position_id"] = data_df["position_id"].astype(str)
+        res_df["position_id"] = res_df["position_id"].astype(str)
+        action_df["position_id"] = action_df["position_id"].astype(str)
+        
+        # Identify SC positions
+        sc_cond1 = action_df["nf_position_manager_address"] != UNISWAP_NFT_MANAGER
+        multiple_owners = action_df.groupby("position_id")["liquidity_provider"].nunique()
+        position_id_multiple = multiple_owners[multiple_owners > 1].index
+        sc_cond2 = (action_df["position_id"].isin(position_id_multiple)) & \
+                   (action_df["to_address"] != UNISWAP_NFT_MANAGER) & \
+                   (action_df["to_address"] != UNISWAP_MIGRATOR)
+        position_id_sc = action_df[(sc_cond1 | sc_cond2)]["position_id"].unique()
+        
+        # Process amounts and calculate ROIs
+        res_df = self.process_amount_events(res_df)
+        res_df = calculate_roi(res_df)
+        
+        # Add SC information
+        res_df["sc"] = res_df["position_id"].isin(position_id_sc)
+        res_df = self._process_sc_positions(res_df)
+        
+        # Calculate SC metrics
+        sc_positions = res_df[res_df["sc"]].copy()
+        sc_positions_created_date = sc_positions.groupby("position_id")["date"].min().reset_index()
+        sc_positions_created_date.rename(columns={"date": "sc_position_creation_date"}, inplace=True)
+        res_df = res_df.merge(sc_positions_created_date, on="position_id", how="left")
+        
+        return res_df
         
     def _process_sc_positions(self, df: pd.DataFrame) -> pd.DataFrame:
-        df["sc"] = True
-        df.loc[df["nf_position_manager_address"] != self.pool_info.nft_manager, "sc"] = False
+        """Process smart contract specific metrics."""
+        df["sc_type"] = "unknown"
+        df.loc[df["sc"] & df["both_match"], "sc_type"] = "recommended"
+        df.loc[df["sc"] & ~df["both_match"], "sc_type"] = "custom"
         return df
