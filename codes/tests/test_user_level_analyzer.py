@@ -3,7 +3,7 @@ import pytest
 import pandas as pd
 from datetime import datetime
 
-from codes.01_create.user_level_analyzer import UserLevelAnalyzer
+from codes.create.user_level_analyzer import UserLevelAnalyzer
 
 @pytest.fixture
 def sample_pool_addr():
@@ -24,7 +24,7 @@ def test_user_level_analyzer_with_sample_data(sample_pool_addr, sample_lp_data):
     
     # Basic data validation
     assert not sample_lp_data.empty
-    assert 'position_id' in sample_lp_data.columns
+    assert 'nf_token_id' in sample_lp_data.columns
     assert 'liquidity_provider' in sample_lp_data.columns
     
     # Test data processing

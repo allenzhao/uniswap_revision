@@ -5,7 +5,7 @@ import numpy as np
 def get_relevant_position_ids_for_increase_only(x: pd.Series, helper_df: pd.DataFrame) -> np.ndarray:
     helper_df = helper_df.copy()
     sc_addr = x["nf_position_manager_address"]
-    date = x["block_timestamp"]
+    date = pd.to_datetime(x["block_timestamp"]).date()
     cond1 = helper_df["nf_position_manager_address"] == sc_addr
     cond2 = helper_df["date_max"] >= date
     cond = cond1 & cond2
@@ -14,8 +14,8 @@ def get_relevant_position_ids_for_increase_only(x: pd.Series, helper_df: pd.Data
 def get_relevant_position_ids_for_decrease(x: pd.Series, helper_df: pd.DataFrame) -> np.ndarray:
     helper_df = helper_df.copy()
     sc_addr = x["nf_position_manager_address"]
-    start_date = x["block_timestamp_min"]
-    end_date = x["block_timestamp_max"]
+    start_date = pd.to_datetime(x["block_timestamp_min"]).date()
+    end_date = pd.to_datetime(x["block_timestamp_max"]).date()
     cond1 = helper_df["nf_position_manager_address"] == sc_addr
     cond2 = helper_df["date_max"] >= start_date
     cond3 = helper_df["date_min"] <= end_date
