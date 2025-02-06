@@ -22,16 +22,32 @@ class UserLevelAnalyzer:
         self.pickle_path = os.path.join(self.data_folder_path, 'raw', 'pkl')
         self.pool_info = POOL_INFO[pool_addr]
         
-    def load_data(self) -> None:
+    def load_data(self, test_data: pd.DataFrame = None) -> None:
         """Load required data files."""
-        self.data_df = pd.read_pickle(os.path.join(self.pickle_path, f"input_info_{self.pool_addr}.pkl"))
-        self.data_df["position_id"] = self.data_df["position_id"].astype(str)
+        if test_data is not None:
+            self.data_df = test_data.copy()
+            self.data_df["position_id"] = self.data_df["nf_token_id"].astype(str)
+        else:
+            self.data_df = pd.read_pickle(os.path.join(self.pickle_path, f"input_info_{self.pool_addr}.pkl"))
+            self.data_df["position_id"] = self.data_df["position_id"].astype(str)
         self.data_df["sc"] = self.data_df["nf_position_manager_address"] != UNISWAP_NFT_MANAGER
         
-        self.daily_prices = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'daily_pool_agg_results.csv'))
-        self.weekly_prices = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'weekly_pool_agg_results.csv'))
-        self.false_sc_list = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'not_verified_sc_list.csv'))
-        self.sc_verification_data = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'sc_verified_data.csv'))
+        if test_data is not None:
+            # Create mock price data for testing
+            self.daily_prices = pd.DataFrame({
+                'pool_address': [self.pool_addr],
+                'date': [pd.Timestamp.now().date()],
+                'close': [1.0],
+                'open': [1.0]
+            })
+            self.weekly_prices = self.daily_prices.copy()
+            self.false_sc_list = pd.DataFrame({'0': []})
+            self.sc_verification_data = pd.DataFrame({'address': []})
+        else:
+            self.daily_prices = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'daily_pool_agg_results.csv'))
+            self.weekly_prices = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'weekly_pool_agg_results.csv'))
+            self.false_sc_list = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'not_verified_sc_list.csv'))
+            self.sc_verification_data = pd.read_csv(os.path.join(self.data_folder_path, "raw", 'sc_verified_data.csv'))
         
         self.res_df = pd.read_pickle(os.path.join(self.data_folder_path, 'raw', 'pkl', f"done_accounting_day_datas_{self.pool_addr}.pkl"))
         self.res_df["position_id"] = self.res_df["position_id"].astype(str)
