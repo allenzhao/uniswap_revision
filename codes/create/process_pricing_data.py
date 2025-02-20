@@ -10,6 +10,7 @@ from codes.shared_library.utils import POOL_ADDR, get_parent, POOL_INFO
 def agg_ohlcv(x):
     price_arr = x['price'].values
     tick_arr = x['tick'].values
+    
     names = {
         'low': min(price_arr) if len(price_arr) > 0 else np.nan,
         'high': max(price_arr) if len(price_arr) > 0 else np.nan,
@@ -30,30 +31,72 @@ def agg_ohlcv(x):
             x['buying_crypto_trade'].values) > 0 else 0,
         'buying_stable_trade_cnt': sum(x['buying_stable_trade'].values) if len(
             x['buying_stable_trade'].values) > 0 else 0,
+        'buy_trades': sum(x['buying_crypto_trade'].values) if len(x['buying_crypto_trade'].values) > 0 else 0,
+        'sell_trades': sum(x['buying_crypto_trade'].values) if len(x['buying_stable_trade'].values) > 0 else 0,
+        'price_avg': np.mean(price_arr) if len(price_arr) > 0 else np.nan,
+        'price_std': np.std(price_arr) if len(price_arr) > 0 else np.nan,
+        'tx_users': len(np.unique(x.index)) if len(x.index) > 0 else 0,
+        'log_buy': np.log(sum(x['buying_crypto_trade'].values) + 1) if len(x['buying_crypto_trade'].values) > 0 else np.nan,
+        'log_sell': np.log(sum(~x['buying_crypto_trade'].values) + 1) if len(x['buying_crypto_trade'].values) > 0 else np.nan,
+        'log_price': np.log(np.mean(price_arr) + 1) if len(price_arr) > 0 else np.nan,
+        'log_vol': np.log(sum(x['amount'].values) + 1) if len(x['amount'].values) > 0 else np.nan,
+        'log_price_std': np.log(np.std(price_arr)) if len(price_arr) > 0 and np.std(price_arr) > 0 else np.nan,
+        'log_tx_users': np.log(len(np.unique(x.index)) + 1) if len(x.index) > 0 else np.nan,
     }
     return pd.Series(names)
 
 
-if __name__ == "__main__":
+def process_pool_pricing_data(frequencies=None):
+    """
+    Process pool pricing data and generate aggregated results at specified frequencies.
+    
+    Args:
+        frequencies (list, optional): List of frequencies to aggregate data by. 
+            Valid options are 'D' (daily), 'W' (weekly), 'M' (monthly).
+            If None, defaults to ['D', 'W', 'M'].
+    
+    Returns:
+        dict: Dictionary containing DataFrames for each frequency level
+    """
+    if frequencies is None:
+        frequencies = ['D', 'W', 'M']
+    
+    frequency_labels = {'D': 'daily', 'W': 'weekly', 'M': 'monthly'}
+    
+    # Validate input frequencies
+    valid_frequencies = set(['D', 'W', 'M'])
+    if not all(freq in valid_frequencies for freq in frequencies):
+        raise ValueError(f"Invalid frequency. Must be one of {valid_frequencies}")
+
     raw_folder_path = os.path.join(get_parent(), "data", "raw")
-    file_path = os.path.join(raw_folder_path, "all_swaps.csv")
-    all_swaps_df = pd.read_csv(file_path, low_memory=False, parse_dates=["block_timestamp"])
+    
+    # Read and concatenate all split CSV files
+    all_swaps_df = pd.DataFrame()
+    for i in range(1, 3):  # We have 2 parts
+        file_path = os.path.join(raw_folder_path, f"all_swaps_part{i}.csv")
+        if os.path.exists(file_path):
+            print(f"Reading part {i}...")
+            df_part = pd.read_csv(file_path, low_memory=False, parse_dates=["block_timestamp"])
+            all_swaps_df = pd.concat([all_swaps_df, df_part], ignore_index=True)
+    
     # Fix issue
     all_swaps_df = all_swaps_df[
         all_swaps_df["tx_hash"] != '0xcdf9d46f009c8fe02b04889b5e927f3a49004ac246cd76140ff8890563b9374b'].copy()
-    all_daily = pd.DataFrame()
-    all_weekly = pd.DataFrame()
+
+    all_results = {freq: pd.DataFrame() for freq in frequencies}
+
     for pool_addr in POOL_ADDR:
         print(f"Working on {pool_addr}")
         pool_info = POOL_INFO[pool_addr]
         current_pool_df = all_swaps_df[all_swaps_df["pool_address"] == pool_addr].copy().set_index(
             "block_timestamp").sort_values(by='block_timestamp')
+        
         if pool_info.base_token0:
             current_pool_df["price"] = current_pool_df["price_0_1"]
             current_pool_df["amount_stable_abs"] = current_pool_df["amount0_adjusted"].abs()
             current_pool_df["amount_crypto_abs"] = current_pool_df["amount1_adjusted"].abs()
             current_pool_df["amount_stable"] = current_pool_df["amount0_adjusted"]
-            current_pool_df["amount_crypto"] = current_pool_df["amount1_adjusted"]  # > 0 means more crypto goes in
+            current_pool_df["amount_crypto"] = current_pool_df["amount1_adjusted"]
             current_pool_df["amount_stable_usd"] = current_pool_df["amount0_usd"]
             current_pool_df["amount_crypto_usd"] = current_pool_df["amount1_usd"]
             current_pool_df["buying_crypto_trade"] = current_pool_df["amount1_adjusted"] < 0
@@ -68,19 +111,30 @@ if __name__ == "__main__":
             current_pool_df["amount_crypto_usd"] = current_pool_df["amount0_usd"]
             current_pool_df["buying_crypto_trade"] = current_pool_df["amount0_adjusted"] < 0
             current_pool_df["buying_stable_trade"] = current_pool_df["amount1_adjusted"] < 0
+        
         current_pool_df["amount"] = (current_pool_df["amount0_usd"].abs() + current_pool_df["amount1_usd"].abs()) / 2
-        print("Resampling by day")
-        current_pool_df_ohlcv_by_day = current_pool_df.resample('D').apply(agg_ohlcv)
-        current_pool_df_ohlcv_by_day = current_pool_df_ohlcv_by_day.ffill().reset_index()
-        print("Resampling by week")
-        current_pool_df_ohlcv_by_week = current_pool_df.resample('W', label='left').apply(agg_ohlcv)
-        current_pool_df_ohlcv_by_week = current_pool_df_ohlcv_by_week.ffill().reset_index()
-        current_pool_df_ohlcv_by_day["pool_address"] = pool_addr
-        current_pool_df_ohlcv_by_day.rename(columns={"block_timestamp": "date"}, inplace=True)
-        current_pool_df_ohlcv_by_week["pool_address"] = pool_addr
-        current_pool_df_ohlcv_by_week.rename(columns={"block_timestamp": "week"}, inplace=True)
-        all_daily = pd.concat([all_daily, current_pool_df_ohlcv_by_day], ignore_index=True)
-        all_weekly = pd.concat([all_weekly, current_pool_df_ohlcv_by_week], ignore_index=True)
+
+        for freq in frequencies:
+            print(f"Resampling by {frequency_labels[freq]}")
+            label_param = {}
+            if freq == 'W':
+                label_param['label'] = 'left'
+            resampled_df = current_pool_df.resample(freq, **label_param).apply(agg_ohlcv)
+            resampled_df = resampled_df.ffill().reset_index()
+            resampled_df["pool_address"] = pool_addr
+            resampled_df.rename(columns={"block_timestamp": "date"}, inplace=True)
+            all_results[freq] = pd.concat([all_results[freq], resampled_df], ignore_index=True)
         print("Done with this pool")
-    all_daily.to_csv(os.path.join(raw_folder_path, "daily_pool_agg_results.csv"), index=False)
-    all_weekly.to_csv(os.path.join(raw_folder_path, "weekly_pool_agg_results.csv"), index=False)
+
+    # Save results
+    for freq in frequencies:
+        freq_label = frequency_labels[freq]
+        output_filename = f"{freq_label}_pool_agg_results.csv"
+        all_results[freq].to_csv(os.path.join(raw_folder_path, output_filename), index=False)
+    
+    return all_results
+
+
+if __name__ == "__main__":
+    # Run with default settings
+    process_pool_pricing_data()
