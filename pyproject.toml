@@ -5,7 +5,7 @@ description = "Analysis of Uniswap v3 pool equality and efficiency"
 authors = ["Alle Zehan Zhao"]
 readme = "README.md"
 packages = [{include = "uniswap_eqality"}]
-package-mode = false
+package-mode = true
 
 [tool.poetry.dependencies]
 python = "^3.10, <3.12"
@@ -20,6 +20,8 @@ jupyter = "^1.0.0"
 matplotlib = "^3.8.2"
 seaborn = "^0.13.1"
 
+
+[tool.uv]
 
 [build-system]
 requires = ["poetry-core"]
